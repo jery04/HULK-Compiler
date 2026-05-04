@@ -1071,3 +1071,505 @@ fn mega_program() {
     assert!(toks.contains(&Token::New));
     assert!(toks.contains(&Token::Arrow));
 }
+#[test]
+fn type_A_definition() {
+    assert_eq!(
+        tokens(r#"type A { f(x:Number)=>x+1; }"#),
+        vec![
+            Token::Type, Token::Ident("A".into()),
+            Token::LBrace,
+                Token::Ident("f".into()),
+                Token::LParen, Token::Ident("x".into()),
+                Token::Colon, Token::Ident("Number".into()),
+                Token::RParen,
+                Token::Arrow,
+                Token::Ident("x".into()),
+                Token::Plus,
+                Token::Number("1".into()),
+                Token::Semicolon,
+            Token::RBrace,
+        ]
+    );
+}
+#[test]
+fn let_new_A_and_if_else() {
+    assert_eq!(
+        tokens(r#"let a = new A() in { if(true){ a.f(1); } else { a.f(2); } }"#),
+        vec![
+            Token::Let, Token::Ident("a".into()),
+            Token::Eq,
+            Token::New, Token::Ident("A".into()),
+            Token::LParen, Token::RParen,
+            Token::In,
+            Token::LBrace,
+                Token::If,
+                Token::LParen, Token::True, Token::RParen,
+                Token::LBrace,
+                    Token::Ident("a".into()), Token::Dot, Token::Ident("f".into()),
+                    Token::LParen, Token::Number("1".into()), Token::RParen,
+                    Token::Semicolon,
+                Token::RBrace,
+                Token::Else,
+                Token::LBrace,
+                    Token::Ident("a".into()), Token::Dot, Token::Ident("f".into()),
+                    Token::LParen, Token::Number("2".into()), Token::RParen,
+                    Token::Semicolon,
+                Token::RBrace,
+            Token::RBrace,
+        ]
+    );
+}
+#[test]
+fn type_animal_and_dog() {
+    assert_eq!(
+        tokens(r#"
+            type Animal { name: String, age: Number }
+            type Dog inherits Animal { breed: String }
+        "#),
+        vec![
+            Token::Type, Token::Ident("Animal".into()),
+            Token::LBrace,
+                Token::Ident("name".into()), Token::Colon, Token::Ident("String".into()), Token::Comma,
+                Token::Ident("age".into()), Token::Colon, Token::Ident("Number".into()),
+            Token::RBrace,
+
+            Token::Type, Token::Ident("Dog".into()),
+            Token::Inherits, Token::Ident("Animal".into()),
+            Token::LBrace,
+                Token::Ident("breed".into()), Token::Colon, Token::Ident("String".into()),
+            Token::RBrace,
+        ]
+    );
+}
+#[test]
+fn function_makeDog() {
+    assert_eq!(
+        tokens(r#"
+            function makeDog(n:String, b:String) => {
+                let d : Dog = new Dog() in {
+                    d.name = n;
+                    d.age = 1;
+                    d.breed = b;
+                    d
+                }
+            }
+        "#),
+        vec![
+            Token::Function, Token::Ident("makeDog".into()),
+            Token::LParen,
+                Token::Ident("n".into()), Token::Colon, Token::Ident("String".into()), Token::Comma,
+                Token::Ident("b".into()), Token::Colon, Token::Ident("String".into()),
+            Token::RParen,
+            Token::Arrow,
+            Token::LBrace,
+                Token::Let, Token::Ident("d".into()),
+                Token::Colon, Token::Ident("Dog".into()),
+                Token::Eq,
+                Token::New, Token::Ident("Dog".into()),
+                Token::LParen, Token::RParen,
+                Token::In,
+                Token::LBrace,
+                    Token::Ident("d".into()), Token::Dot, Token::Ident("name".into()),
+                    Token::Eq, Token::Ident("n".into()), Token::Semicolon,
+
+                    Token::Ident("d".into()), Token::Dot, Token::Ident("age".into()),
+                    Token::Eq, Token::Number("1".into()), Token::Semicolon,
+
+                    Token::Ident("d".into()), Token::Dot, Token::Ident("breed".into()),
+                    Token::Eq, Token::Ident("b".into()), Token::Semicolon,
+
+                    Token::Ident("d".into()),
+                Token::RBrace,
+            Token::RBrace,
+        ]
+    );
+}
+
+#[test]
+fn math_expression_x() {
+    assert_eq!(
+        tokens(r#"let x := 10 + 20 * (3 - 1)"#),
+        vec![
+            Token::Let, Token::Ident("x".into()),
+            Token::ColonAssign,
+            Token::Number("10".into()),
+            Token::Plus,
+            Token::Number("20".into()),
+            Token::Star,
+            Token::LParen,
+                Token::Number("3".into()),
+                Token::Minus,
+                Token::Number("1".into()),
+            Token::RParen,
+        ]
+    );
+}
+
+#[test]
+fn function_makeCat() {
+    assert_eq!(
+        tokens(r#"
+            function makeCat(n:String, c:String) => {
+                let x : Cat = new Cat() in {
+                    x.name = n;
+                    x.color = c;
+                    x
+                }
+            }
+        "#),
+        vec![
+            Token::Function, Token::Ident("makeCat".into()),
+            Token::LParen,
+                Token::Ident("n".into()), Token::Colon, Token::Ident("String".into()), Token::Comma,
+                Token::Ident("c".into()), Token::Colon, Token::Ident("String".into()),
+            Token::RParen,
+            Token::Arrow,
+            Token::LBrace,
+                Token::Let, Token::Ident("x".into()),
+                Token::Colon, Token::Ident("Cat".into()),
+                Token::Eq,
+                Token::New, Token::Ident("Cat".into()),
+                Token::LParen, Token::RParen,
+                Token::In,
+                Token::LBrace,
+                    Token::Ident("x".into()), Token::Dot, Token::Ident("name".into()),
+                    Token::Eq, Token::Ident("n".into()), Token::Semicolon,
+
+                    Token::Ident("x".into()), Token::Dot, Token::Ident("color".into()),
+                    Token::Eq, Token::Ident("c".into()), Token::Semicolon,
+
+                    Token::Ident("x".into()),
+                Token::RBrace,
+            Token::RBrace,
+        ]
+    );
+}
+
+#[test]
+fn math_expr_y() {
+    assert_eq!(
+        tokens(r#"let y := (5 * 2) + 7 - 3"#),
+        vec![
+            Token::Let, Token::Ident("y".into()),
+            Token::ColonAssign,
+            Token::LParen,
+                Token::Number("5".into()),
+                Token::Star,
+                Token::Number("2".into()),
+            Token::RParen,
+            Token::Plus,
+            Token::Number("7".into()),
+            Token::Minus,
+            Token::Number("3".into()),
+        ]
+    );
+}
+#[test]
+fn call_method() {
+    assert_eq!(
+        tokens(r#"obj.run(10)"#),
+        vec![
+            Token::Ident("obj".into()), Token::Dot, Token::Ident("run".into()),
+            Token::LParen,
+                Token::Number("10".into()),
+            Token::RParen,
+        ]
+    );
+}
+
+#[test]
+fn compare_ops() {
+    assert_eq!(
+        tokens(r#"a >= b & b <= c"#),
+        vec![
+            Token::Ident("a".into()), Token::GtEq, Token::Ident("b".into()),
+            Token::Amp,
+            Token::Ident("b".into()), Token::LtEq, Token::Ident("c".into()),
+        ]
+    );
+}
+
+#[test]
+fn not_equal_test() {
+    assert_eq!(
+        tokens(r#"x != y"#),
+        vec![
+            Token::Ident("x".into()), Token::BangEq, Token::Ident("y".into()),
+        ]
+    );
+}
+
+#[test]
+fn block_expression() {
+    assert_eq!(
+        tokens(r#"{ let x := 1; x + 2 }"#),
+        vec![
+            Token::LBrace,
+                Token::Let, Token::Ident("x".into()), Token::ColonAssign, Token::Number("1".into()), Token::Semicolon,
+                Token::Ident("x".into()), Token::Plus, Token::Number("2".into()),
+            Token::RBrace,
+        ]
+    );
+}
+
+#[test]
+fn nested_blocks() {
+    assert_eq!(
+        tokens(r#"{ { { 5 } } }"#),
+        vec![
+            Token::LBrace,
+                Token::LBrace,
+                    Token::LBrace,
+                        Token::Number("5".into()),
+                    Token::RBrace,
+                Token::RBrace,
+            Token::RBrace,
+        ]
+    );
+}
+#[test]
+fn for_loop_like() {
+    assert_eq!(
+        tokens(r#"
+            for(i := 0; i < 5; i = i + 1){
+                print(i);
+            }
+        "#),
+        vec![
+            Token::For, Token::LParen,
+                Token::Ident("i".into()), Token::ColonAssign, Token::Number("0".into()), Token::Semicolon,
+                Token::Ident("i".into()), Token::Lt, Token::Number("5".into()), Token::Semicolon,
+                Token::Ident("i".into()), Token::Eq,
+                Token::Ident("i".into()), Token::Plus, Token::Number("1".into()),
+            Token::RParen,
+            Token::LBrace,
+                Token::Ident("print".into()), Token::LParen,
+                    Token::Ident("i".into()),
+                Token::RParen, Token::Semicolon,
+            Token::RBrace,
+        ]
+    );
+}
+
+#[test]
+fn function_no_args() {
+    assert_eq!(
+        tokens(r#"function ping() => 1"#),
+        vec![
+            Token::Function, Token::Ident("ping".into()),
+            Token::LParen, Token::RParen,
+            Token::Arrow,
+            Token::Number("1".into()),
+        ]
+    );
+}
+
+#[test]
+fn function_return_bool() {
+    assert_eq!(
+        tokens(r#"function isZero(n:Number) => n == 0"#),
+        vec![
+            Token::Function, Token::Ident("isZero".into()),
+            Token::LParen,
+                Token::Ident("n".into()), Token::Colon, Token::Ident("Number".into()),
+            Token::RParen,
+            Token::Arrow,
+            Token::Ident("n".into()), Token::EqEq, Token::Number("0".into()),
+        ]
+    );
+}
+
+#[test]
+fn assign_chain() {
+    assert_eq!(
+        tokens(r#"a = b = c = 5"#),
+        vec![
+            Token::Ident("a".into()), Token::Eq,
+            Token::Ident("b".into()), Token::Eq,
+            Token::Ident("c".into()), Token::Eq,
+            Token::Number("5".into()),
+        ]
+    );
+}
+
+#[test]
+fn string_concat() {
+    assert_eq!(
+        tokens(r#"let s := "hi" @ " there""#),
+        vec![
+            Token::Let, Token::Ident("s".into()),
+            Token::ColonAssign,
+            Token::StringLit("hi".into()),
+            Token::At,
+            Token::StringLit(" there".into()),
+        ]
+    );
+}
+
+#[test]
+fn new_object_with_args() {
+    assert_eq!(
+        tokens(r#"let p := new Point(3,4)"#),
+        vec![
+            Token::Let, Token::Ident("p".into()),
+            Token::ColonAssign,
+            Token::New, Token::Ident("Point".into()),
+            Token::LParen,
+                Token::Number("3".into()), Token::Comma, Token::Number("4".into()),
+            Token::RParen,
+        ]
+    );
+}
+
+#[test]
+fn array_literal() {
+    assert_eq!(
+        tokens(r#"[1,2,3]"#),
+        vec![
+            Token::LBracket,
+                Token::Number("1".into()), Token::Comma,
+                Token::Number("2".into()), Token::Comma,
+                Token::Number("3".into()),
+            Token::RBracket,
+        ]
+    );
+}
+
+#[test]
+fn index_access() {
+    assert_eq!(
+        tokens(r#"a[2]"#),
+        vec![
+            Token::Ident("a".into()),
+            Token::LBracket,
+                Token::Number("2".into()),
+            Token::RBracket,
+        ]
+    );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#[test]
+fn boolean_logic_1() {
+    assert_eq!(
+        tokens(r#"let ok := true & false"#),
+        vec![
+            Token::Let, Token::Ident("ok".into()),
+            Token::ColonAssign,
+            Token::True,
+            Token::Amp,
+            Token::False,
+        ]
+    );
+}
+
+#[test]
+fn boolean_logic_2() {
+    assert_eq!(
+        tokens(r#"let r := !false | true"#),
+        vec![
+            Token::Let, Token::Ident("r".into()),
+            Token::ColonAssign,
+            Token::Bang,
+            Token::False,
+            Token::Pipe,
+            Token::True,
+        ]
+    );
+}
+
+#[test]
+fn nested_if_expr() {
+    assert_eq!(
+        tokens(r#"
+            if(x > 10){
+                if(y < 5){ y } else { x }
+            }else{
+                0
+            }
+        "#),
+        vec![
+            Token::If, Token::LParen,
+                Token::Ident("x".into()), Token::Gt, Token::Number("10".into()),
+            Token::RParen,
+            Token::LBrace,
+                Token::If, Token::LParen,
+                    Token::Ident("y".into()), Token::Lt, Token::Number("5".into()),
+                Token::RParen,
+                Token::LBrace,
+                    Token::Ident("y".into()),
+                Token::RBrace,
+                Token::Else,
+                Token::LBrace,
+                    Token::Ident("x".into()),
+                Token::RBrace,
+            Token::RBrace,
+            Token::Else,
+            Token::LBrace,
+                Token::Number("0".into()),
+            Token::RBrace,
+        ]
+    );
+}
+
+#[test]
+fn while_loop_simple() {
+    assert_eq!(
+        tokens(r#"
+            while(i < 10){
+                i = i + 1;
+            }
+        "#),
+        vec![
+            Token::While, Token::LParen,
+                Token::Ident("i".into()), Token::Lt, Token::Number("10".into()),
+            Token::RParen,
+            Token::LBrace,
+                Token::Ident("i".into()), Token::Eq,
+                Token::Ident("i".into()), Token::Plus, Token::Number("1".into()),
+                Token::Semicolon,
+            Token::RBrace,
+        ]
+    );
+}
+#[test]
+fn function_distance() {
+    assert_eq!(
+        tokens(r#"
+            function distance(x:Number, y:Number) => {
+                let d := x * x + y * y;
+                d
+            }
+        "#),
+        vec![
+            Token::Function, Token::Ident("distance".into()),
+            Token::LParen,
+                Token::Ident("x".into()), Token::Colon, Token::Ident("Number".into()), Token::Comma,
+                Token::Ident("y".into()), Token::Colon, Token::Ident("Number".into()),
+            Token::RParen,
+            Token::Arrow,
+            Token::LBrace,
+                Token::Let, Token::Ident("d".into()),
+                Token::ColonAssign,
+                Token::Ident("x".into()), Token::Star, Token::Ident("x".into()),
+                Token::Plus,
+                Token::Ident("y".into()), Token::Star, Token::Ident("y".into()),
+                Token::Semicolon,
+
+                Token::Ident("d".into()),
+            Token::RBrace,
+        ]
+    );
+}
