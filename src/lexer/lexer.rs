@@ -2,11 +2,11 @@
 
 use logos::{Logos, SpannedIter};
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Posición en el código fuente (línea/columna base-1)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------
+// SOURCE POSITION (1-BASED LINE/COLUMN)
+// ---------------------------------------------
 
-/// Posición en el código fuente. Ambos valores son base-1.
+/// Position in the source code. Both values are 1-based.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Pos {
     pub line: usize,
@@ -19,7 +19,7 @@ impl std::fmt::Display for Pos {
     }
 }
 
-/// Span de un token: posición inicial y final en el fuente.
+/// Span of a token: start and end position in the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Span {
     pub start: Pos,
@@ -32,18 +32,19 @@ impl std::fmt::Display for Span {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tabla de líneas — convierte byte-offset → (línea, columna)
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------
+// LINE TABLE: BYTE OFFSET TO (LINE, COLUMN)
+// ---------------------------------------------
 
-/// Índice de offsets de inicio de cada línea.
-/// Permite convertir byte-offset → (línea, columna) en O(log n).
+/// Index of start offsets for each line.
+/// Allows converting byte-offset → (line, column) in O(log n).
 pub struct LineIndex {
-    /// starts[i] = byte-offset donde comienza la línea i+1 (base-1).
+    /// starts[i] = byte offset where line i+1 starts (1-based).
     starts: Vec<usize>,
 }
 
 impl LineIndex {
+    /// Create a new LineIndex from the source text.
     pub fn new(source: &str) -> Self {
         let mut starts = vec![0usize];
         for (i, b) in source.bytes().enumerate() {
@@ -54,7 +55,7 @@ impl LineIndex {
         Self { starts }
     }
 
-    /// Convierte un byte-offset a Pos (línea y columna base-1).
+    /// Convert a byte offset to a `Pos` (1-based line and column).
     pub fn pos(&self, offset: usize) -> Pos {
         let line_idx = self.starts.partition_point(|&s| s <= offset) - 1;
         let col = offset - self.starts[line_idx] + 1;
@@ -64,16 +65,16 @@ impl LineIndex {
         }
     }
 
-    /// Convierte un rango de bytes en un Span.
+    /// Convert a byte range into a `Span`.
     pub fn span(&self, range: std::ops::Range<usize>) -> Span {
         Span {
             start: self.pos(range.start),
-            // end apunta al último byte del token, no al siguiente
+            // End points to the token last byte, not the next one.
             end: self.pos(range.end.saturating_sub(1)),
         }
     }
 
-    /// Posición del EOF: un carácter después del último.
+    /// Position of EOF: one character after the last.
     pub fn eof_pos(&self, source_len: usize) -> Pos {
         if source_len == 0 {
             Pos { line: 1, col: 1 }
@@ -87,16 +88,18 @@ impl LineIndex {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Token — definición completa del lenguaje HULK
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------
+// TOKENS FOR THE HULK LANGUAGE
+// ---------------------------------------------
 
 #[derive(Logos, Debug, Clone, PartialEq)]
-#[logos(skip r"[ \t\r\n]+")]  // whitespace (no significativo en HULK)
-#[logos(skip r"//[^\n]*")]    // comentarios de línea
+#[logos(skip r"[ \t\r\n]+")]  // Skip whitespace.
+#[logos(skip r"//[^\n]*")]    // Skip line comments.
 pub enum Token {
 
-    // ── Palabras clave ────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // KEYWORDS
+    // ---------------------------------------------
     #[token("let")]      Let,
     #[token("in")]       In,
     #[token("if")]       If,
@@ -116,9 +119,11 @@ pub enum Token {
     #[token("base")]     Base,
     #[token("protocol")] Protocol,
     #[token("extends")]  Extends,
-    #[token("def")]      Def,       // macros (sección A.14)
+    #[token("def")]      Def,       // Macros (section A.14).
 
-    // ── Builtins matemáticos ───────────────────────────────────────────────
+    // ---------------------------------------------
+    // BUILT-IN MATH FUNCTIONS AND TYPES
+    // ---------------------------------------------
 
     #[token("sqrt")]     Sqrt,
     #[token("sin")]      Sin,
@@ -132,64 +137,74 @@ pub enum Token {
     #[token("String", priority = 3)]  TypString,
     #[token("Boolean", priority = 3)] TypBool,
 
-    // ── Literales ─────────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // LITERALS
+    // ---------------------------------------------
 
-    /// Número: entero o flotante.
+    /// Numeric literal: integer or float.
     #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice().to_owned())]
     Number(String),
 
-    /// String literal con soporte de escapes: \" \n \t \\
+    /// String literal with escapes: \" \n \t \\
     #[regex(r#""([^\n"\\]|\\.)*""#, lex_string)]
     StringLit(String),
 
-    // ── Identificadores ───────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // IDENTIFIERS
+    // ---------------------------------------------
 
-    /// Identificador válido en HULK: comienza con letra, sigue con letras,
-    /// dígitos o guión bajo.
-    /// Ejemplos: x  x0  camelCase  TitleCase  snake_case
+    /// Valid HULK identifier: starts with a letter, then letters,
+    /// digits, or underscore.
+    /// Examples: x  x0  camelCase  TitleCase  snake_case
     #[regex(r"[a-zA-Z][a-zA-Z0-9_]*", |lex| lex.slice().to_owned())]
     Ident(String),
 
-    /// Identificador que comienza con '_'.
+    /// Identifier that starts with '_'.
     ///
-    /// En código de usuario es un error semántico (no léxico).
-    /// El compilador los genera internamente en transpilaciones
-    /// (_total, _IsOddWrapper, etc.) por lo que deben ser tokens válidos
-    /// para que el mismo lexer pueda re-tokenizar código transpilado.
+    /// In user code this is a semantic error (not lexical).
+    /// The compiler generates these internally in transpilation
+    /// (_total, _IsOddWrapper, etc.), so they must be valid tokens
+    /// so the same lexer can re-tokenize transpiled code.
     ///
-    /// El parser rechaza `InternalIdent` en posiciones de código de usuario
-    /// y los acepta solo en código generado por el compilador.
+    /// The parser rejects `InternalIdent` in user code positions
+    /// and accepts it only in compiler-generated code.
     #[regex(r"_[a-zA-Z0-9_]*", |lex| lex.slice().to_owned())]
     InternalIdent(String),
 
-    // ── Operadores de dos o más caracteres (ANTES de los de un carácter) ─────
+    // ---------------------------------------------------
+    // MULTI-CHARACTER OPERATORS (BEFORE SINGLE-CHARACTER)
+    // ---------------------------------------------------
 
-    #[token(":=")] ColonAssign,   // asignación destructiva
-    #[token("=>")] Arrow,         // cuerpo de función/lambda inline
-    #[token("@@")] ConcatSpace,   // concatenación con espacio (≡ @ " " @)
-    #[token("==")] EqEq,          // igualdad
-    #[token("!=")] BangEq,        // desigualdad
-    #[token("<=")] LtEq,          // menor o igual
-    #[token(">=")] GtEq,          // mayor o igual
-    #[token("->")] ThinArrow,     // tipo functor: (Number) -> Boolean
+    #[token(":=")] ColonAssign,   // Destructive assignment.
+    #[token("=>")] Arrow,         // Inline function/lambda body.
+    #[token("@@")] ConcatSpace,   // Concat with space (@ " " @).
+    #[token("==")] EqEq,          // Equality.
+    #[token("!=")] BangEq,        // Inequality.
+    #[token("<=")] LtEq,          // Less than or equal.
+    #[token(">=")] GtEq,          // Greater than or equal.
+    #[token("->")] ThinArrow,     // Functor type: (Number) -> Boolean.
 
-    // ── Operadores de un carácter ─────────────────────────────────────────────
+    // ---------------------------------------------
+    // SINGLE-CHARACTER OPERATORS
+    // ---------------------------------------------
 
     #[token("+")] Plus,
     #[token("-")] Minus,
     #[token("*")] Star,
     #[token("/")] Slash,
     #[token("%")] Percent,
-    #[token("^")] Caret,       // potencia
-    #[token("@")] At,          // concatenación simple
-    #[token("&")] Amp,         // AND booleano
-    #[token("|")] Pipe,        // OR booleano / separador en vector implícito
-    #[token("!")] Bang,        // NOT booleano
+    #[token("^")] Caret,       // Power.
+    #[token("@")] At,          // Simple concat.
+    #[token("&")] Amp,         // Boolean AND.
+    #[token("|")] Pipe,        // Boolean OR / implicit vector separator.
+    #[token("!")] Bang,        // Boolean NOT.
     #[token("<")] Lt,
     #[token(">")] Gt,
-    #[token("=")] Eq,          // asignación en let/atributos
+    #[token("=")] Eq,          // Assignment in let/attributes.
 
-    // ── Puntuación ────────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // PUNCTUATION
+    // ---------------------------------------------
 
     #[token("(")] LParen,
     #[token(")")] RParen,
@@ -200,26 +215,30 @@ pub enum Token {
     #[token(";")] Semicolon,
     #[token(",")] Comma,
     #[token(".")] Dot,
-    #[token(":")] Colon,       // anotación de tipo: x: Number
-    #[token("$")] Dollar,      // placeholder en macros: $iter
+    #[token(":")] Colon,       // Type annotation: x: Number.
+    #[token("$")] Dollar,      // Macro placeholder: $iter.
 
-    // ── Centinela de fin de archivo ───────────────────────────────────────────
+    // ---------------------------------------------
+    // EOF SENTINEL
+    // ---------------------------------------------
     //
-    // No lleva #[token] ni #[regex]: logos nunca lo emite.
-    // Lo inserta el wrapper `TokenStream` al agotar el iterador interno.
-    // El parser usa este token para detectar EOF sin tener que manejar
-    // Option en cada llamada a peek()/advance().
+    // Not produced by `logos` (no #[token] or #[regex]). The `TokenStream`
+    // wrapper inserts this token when the inner iterator is exhausted.
+    // The parser uses this token to detect EOF without handling `Option`
+    // on every peek()/advance() call.
     Eof,
 }
 
-// ─── Callbacks de logos ───────────────────────────────────────────────────────
+// ---------------------------------------------
+// LOGOS CALLBACKS
+// ---------------------------------------------
 
 
-/// Expande las secuencias de escape de un string literal.
-/// logos ya garantizó que el patrón casa con `"([^"\\]|\\.)*"`.
+/// Expand escape sequences in a string literal.
+/// `logos` already ensures the pattern matches `"([^"\\]|\\.)*"`.
 fn lex_string(lex: &mut logos::Lexer<Token>) -> Option<String> {
     let raw = lex.slice();
-    let inner = &raw[1..raw.len() - 1]; // quitar comillas externas
+    let inner = &raw[1..raw.len() - 1]; // Remove outer quotes.
     let mut out = String::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
@@ -229,7 +248,7 @@ fn lex_string(lex: &mut logos::Lexer<Token>) -> Option<String> {
                 'n'  => out.push('\n'),
                 't'  => out.push('\t'),
                 '\\' => out.push('\\'),
-                // escape desconocido: preservar literalmente
+                // Unknown escape: keep it literal.
                 other => { out.push('\\'); out.push(other); }
             }
         } else {
@@ -239,15 +258,15 @@ fn lex_string(lex: &mut logos::Lexer<Token>) -> Option<String> {
     Some(out)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Error léxico
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------
+// LEXICAL ERROR
+// ---------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexError {
     pub msg: String,
     pub span: Span,
-    /// El texto que causó el error.
+    /// Source text that caused the error.
     pub slice: String,
 }
 
@@ -259,23 +278,23 @@ impl std::fmt::Display for LexError {
 
 impl std::error::Error for LexError {}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Token con posición
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------
+// SPANNED TOKEN
+// ---------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpannedToken {
     pub token: Token,
     pub span: Span,
-    /// Texto original en el fuente. Vacío para Token::Eof.
+    /// Original source text. Empty for Token::Eof.
     pub slice: String,
 }
 
 pub type LexResult = Result<SpannedToken, LexError>;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Lexer interno — wrappea logos, convierte offsets a línea/columna
-// ─────────────────────────────────────────────────────────────────────────────
+// ----------------------------------------
+// INTERNAL LEXER: WRAPS `logos` AND MAPS OFFSETS
+// ---------------------------------------------
 
 struct InnerLexer<'src> {
     inner: SpannedIter<'src, Token>,
@@ -284,6 +303,7 @@ struct InnerLexer<'src> {
 }
 
 impl<'src> InnerLexer<'src> {
+    /// Create a new internal lexer for the given source.
     fn new(source: &'src str) -> Self {
         Self {
             inner: Token::lexer(source).spanned(),
@@ -296,6 +316,7 @@ impl<'src> InnerLexer<'src> {
 impl<'src> Iterator for InnerLexer<'src> {
     type Item = LexResult;
 
+    /// Return the next lexing result with span info.
     fn next(&mut self) -> Option<Self::Item> {
         let (result, byte_range) = self.inner.next()?;
         let span  = self.index.span(byte_range.clone());
@@ -312,21 +333,22 @@ impl<'src> Iterator for InnerLexer<'src> {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TokenStream — interfaz pública
-//
-// Es el único tipo que el parser debe usar. Garantiza:
-//   1. El último token siempre es Token::Eof (nunca devuelve None).
-//   2. Los errores léxicos se acumulan en `errors` y no interrumpen el flujo,
-//      permitiendo que el parser continúe y reporte todos los errores juntos.
-// ─────────────────────────────────────────────────────────────────────────────
+// --------------------------------------------
+// TOKEN STREAM PUBLIC INTERFACE
+// ---------------------------------------------
+
+// The only type the parser should use. Guarantees:
+//   1. The final token is always `Token::Eof` (never returns `None`).
+//   2. Lexical errors are collected in `errors` and do not interrupt
+//      parsing, allowing the parser to continue and report all errors.
+// ---------------------------------------------
 
 pub struct TokenStream<'src> {
     inner:   InnerLexer<'src>,
-    index:   LineIndex,          // necesario para calcular la posición del EOF
+    index:   LineIndex,          // Needed to compute EOF position.
     src_len: usize,
-    /// Errores léxicos encontrados durante la tokenización.
-    /// El parser puede consultarlos después de parsear.
+    /// Lexical errors found during tokenization.
+    /// The parser can inspect them after parsing.
     pub errors: Vec<LexError>,
 }
 
@@ -340,8 +362,8 @@ impl<'src> TokenStream<'src> {
         }
     }
 
-    /// Tokeniza todo el fuente de una vez.
-    /// Devuelve los tokens (incluyendo EOF al final) y acumula los errores.
+    /// Tokenize the entire source at once.
+    /// Returns the tokens (including EOF at the end) and collects errors.
     pub fn tokenize_all(source: &'src str) -> (Vec<SpannedToken>, Vec<LexError>) {
         let mut stream = Self::new(source);
         let mut tokens = Vec::new();
@@ -356,25 +378,24 @@ impl<'src> TokenStream<'src> {
         (tokens, errors)
     }
 
-    /// Avanza y devuelve el siguiente token.
-    /// Nunca devuelve un error: los errores se acumulan en `self.errors`
-    /// y se salta el carácter problemático continuando con el siguiente token.
-    /// Garantiza que siempre termina en Token::Eof.
+    /// Advance and return the next token.
+    /// Never returns an error: lexical errors are pushed to `self.errors`
+    /// and the lexer skips the problematic character to continue.
+    /// Guarantees it eventually returns `Token::Eof`.
     pub fn next_token(&mut self) -> SpannedToken {
         loop {
             match self.inner.next() {
                 Some(Ok(tok)) => return tok,
 
                 Some(Err(err)) => {
-                    // acumular el error y continuar — nunca panic
+                    // Collect the error and continue. Never panic.
                     self.errors.push(err);
-                    // seguir iterando hasta encontrar un token válido o EOF
+                    // Keep scanning until a valid token or EOF.
                 }
 
                 None => {
-                    // fuente agotado — emitir EOF una sola vez y luego
-                    // repetirlo indefinidamente para que el parser pueda
-                    // hacer peek() sin preocuparse por Option
+                    // Source exhausted: emit EOF and keep returning it
+                    // so the parser can peek() without Option handling.
                     let eof_pos = self.index.eof_pos(self.src_len);
                     return SpannedToken {
                         token: Token::Eof,
@@ -386,7 +407,7 @@ impl<'src> TokenStream<'src> {
         }
     }
 
-    /// ¿Hay errores léxicos acumulados?
+    /// Are there accumulated lexical errors?
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
     }

@@ -166,8 +166,8 @@ fn test_function_definition() {
 }
 
 fn main() {
-	//test_expression_example("sin(2 * PI) ^ 2 + cos(3 * PI / log(4, 64))");
-	//test_expression_example("2*(3+4)")
+	test_expression_example("sin(2 * PI) ^ 2 + cos(3 * PI / log(4, 64))");
+	test_expression_example("2*(3+4)");
 	test_function_definition();
 }
 

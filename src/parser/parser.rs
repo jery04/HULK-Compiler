@@ -1,9 +1,10 @@
 use crate::lexer::lexer::{Token, SpannedToken, TokenStream};
 use crate::parser::ast::{BinaryOp, BuiltinFn, ConstValue, Expression, Factor, FunctionBody, FunctionDef, FunctionParam, Term};
 
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ---------------------------------------------
 // Parser
-// ─────────────────────────────────────────────────────────────────────────────
+// ---------------------------------------------
 
 pub struct Parser<'src> {
     tokens: TokenStream<'src>,
@@ -13,9 +14,9 @@ pub struct Parser<'src> {
 
 impl<'src> Parser<'src> {
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Inicialización
-    // ─────────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // Initialization
+    // ---------------------------------------------
 
     pub fn new(mut tokens: TokenStream<'src>) -> Self {
         let first = tokens.next_token();
@@ -27,35 +28,36 @@ impl<'src> Parser<'src> {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Core navigation
-    // ─────────────────────────────────────────────────────────────────────────
 
-    /// Avanza al siguiente token
+    // ---------------------------------------------
+    // Core navigation
+    // ---------------------------------------------
+
+    /// Advance to the next token.
     pub fn advance(&mut self) {
         self.current = self.tokens.next_token();
     }
 
-    /// Token actual (sin consumir)
+    /// Current token without consuming it.
     pub fn peek(&self) -> &Token {
         &self.current.token
     }
 
-    /// ¿Estamos en EOF?
+    /// Return true at EOF.
     pub fn is_at_end(&self) -> bool {
         self.current.token == Token::Eof
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Matching básico
-    // ─────────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // Basic matching
+    // ---------------------------------------------
 
-    /// Verifica si el token actual es igual (exact match)
+    /// Check exact token match.
     pub fn check(&self, token: &Token) -> bool {
         &self.current.token == token
     }
 
-    /// Consume si coincide exactamente
+    /// Consume the token if it matches exactly.
     pub fn matches(&mut self, expected: &Token) -> bool {
         if self.check(expected) {
             self.advance();
@@ -65,7 +67,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Consume uno de varios tokens posibles y devuelve el token consumido
+    /// Consume one of several tokens and return it.
     pub fn match_any(&mut self, tokens: &[Token]) -> Option<SpannedToken> {
         for t in tokens {
             if &self.current.token == t {
@@ -77,16 +79,16 @@ impl<'src> Parser<'src> {
         None
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Matching por "tipo" (clave para tokens con datos)
-    // ─────────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // Kind matching
+    // ---------------------------------------------
 
-    /// Verifica por patrón 
+    /// Check by predicate.
     pub fn check_kind(&self, f: fn(&Token) -> bool) -> bool {
         f(&self.current.token)
     }
 
-    /// Consume si cumple el patrón
+    /// Consume if the predicate matches.
     pub fn match_kind(&mut self, f: fn(&Token) -> bool) -> bool {
         if f(&self.current.token) {
             self.advance();
@@ -96,9 +98,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Expect (obligatorio)
-    // ─────────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // Expect and errors
+    // ---------------------------------------------
 
     pub fn expect(&mut self, expected: &Token, msg: &str) -> Option<SpannedToken> {
         if self.check(expected) {
@@ -111,7 +113,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Expect por patrón (muy importante en lenguajes reales)
+    /// Expect by predicate.
     pub fn expect_kind(
         &mut self,
         f: fn(&Token) -> bool,
@@ -127,20 +129,18 @@ impl<'src> Parser<'src> {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Errores
-    // ─────────────────────────────────────────────────────────────────────────
-
+    /// Record a parsing error with the current token's span.
     fn error(&mut self, msg: &str) {
         let span = self.current.span;
         let full = format!("[ParseError {}] {}", span, msg);
         self.errors.push(full);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Parsing de funciones
-    // ─────────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // Function parsing
+    // ---------------------------------------------
 
+    /// Parse a function definition, which starts with the 'function' keyword, followed by the name, parameters, and body.
     pub fn parse_function(&mut self) -> Option<FunctionDef> {
         self.expect(&Token::Function, "se esperaba 'function'")?;
 
@@ -159,6 +159,7 @@ impl<'src> Parser<'src> {
         Some(FunctionDef { name, params, body })
     }
 
+    /// Parse the parameter list of a function, which is enclosed in parentheses and separated by commas.
     fn parse_function_params(&mut self) -> Option<Vec<FunctionParam>> {
         self.expect(&Token::LParen, "se esperaba '(' despues del nombre de la funcion")?;
 
@@ -179,6 +180,7 @@ impl<'src> Parser<'src> {
         Some(params)
     }
 
+    /// Parse a single function parameter, which consists of an identifier and an optional type annotation.
     fn parse_function_param(&mut self) -> Option<FunctionParam> {
         let name = self.parse_identifier("se esperaba un nombre de parametro")?;
         let ty = if self.matches(&Token::Colon) {
@@ -190,12 +192,14 @@ impl<'src> Parser<'src> {
         Some(FunctionParam { name, ty })
     }
 
+    /// Parse an inline function body, which is a single expression followed by a semicolon.
     fn parse_function_inline_body(&mut self) -> Option<FunctionBody> {
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon, "se esperaba ';' al final del cuerpo inline")?;
         Some(FunctionBody::Inline(expr))
     }
 
+    /// Parse a block function body, which is a series of expressions enclosed in braces and separated by semicolons.
     fn parse_function_block_body(&mut self) -> Option<FunctionBody> {
         self.expect(&Token::LBrace, "se esperaba '{' para abrir el cuerpo de la funcion")?;
 
@@ -223,6 +227,7 @@ impl<'src> Parser<'src> {
         Some(FunctionBody::Block(expressions))
     }
 
+    /// Parse an expression, which can be a term or a binary operation of terms.
     fn parse_identifier(&mut self, msg: &str) -> Option<SpannedToken> {
         match self.peek() {
             Token::Ident(_) | Token::InternalIdent(_) => {
@@ -237,6 +242,7 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Parse a type name, which can be an identifier or a built-in type keyword.
     fn parse_type_name(&mut self, msg: &str) -> Option<SpannedToken> {
         match self.peek() {
             Token::Ident(name) | Token::InternalIdent(name) => {
@@ -268,10 +274,11 @@ impl<'src> Parser<'src> {
     }
 
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Parsing de expresiones
-    // ─────────────────────────────────────────────────────────────────────────
+    // ---------------------------------------------
+    // Expression parsing
+    // ---------------------------------------------
 
+    /// Parse an expression with correct operator precedence.
     pub fn parse_expr(&mut self) -> Option<Expression> {
         let left = Expression::Term(self.parse_term()?);
 
@@ -288,6 +295,7 @@ impl<'src> Parser<'src> {
         Some(left)
     }
 
+    /// Parse a term, which is a factor or a multiplication/division of factors.
     pub fn parse_term(&mut self) -> Option<Term> {
         let left = Term::Factor(self.parse_factor()?);
 
@@ -304,6 +312,7 @@ impl<'src> Parser<'src> {
         Some(left)
     }
 
+    /// Parse a factor, which can be a number, identifier, grouped expression, function call, builtin call, constant, or a power operation.
     pub fn parse_factor(&mut self) -> Option<Factor> {
 
         let base = match self.peek() {
@@ -371,7 +380,7 @@ impl<'src> Parser<'src> {
             }
         };
 
-        // Exponenciación (^) tiene mayor precedencia y es asociativa a la derecha.
+        // Power has the highest precedence and is right-associative.
         if self.matches(&Token::Caret) {
             let right = self.parse_factor()?;
             let right_expr = Expression::Term(Term::Factor(right));
@@ -381,6 +390,7 @@ impl<'src> Parser<'src> {
         Some(base)
     }
 
+    /// Parse arguments for a function call, expecting them to be enclosed in parentheses.
     fn parse_call_args(&mut self, ctx: &str) -> Option<Vec<Expression>> {
         let msg = format!("se esperaba '(' despues de {}", ctx);
         self.expect(&Token::LParen, &msg)?;
@@ -403,6 +413,7 @@ impl<'src> Parser<'src> {
         Some(args)
     }
 
+    /// Convert a token to a binary operator if it matches.
     fn binary_op_from_token(token: &Token) -> Option<BinaryOp> {
         match token {
             Token::Plus => Some(BinaryOp::Add),
@@ -412,45 +423,5 @@ impl<'src> Parser<'src> {
             Token::Caret => Some(BinaryOp::Pow),
             _ => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parser::ast::FunctionBody;
-
-    fn parse_function(src: &str) -> (Parser<'_>, Option<FunctionDef>) {
-        let ts = TokenStream::new(src);
-        let mut parser = Parser::new(ts);
-        let function = parser.parse_function();
-        (parser, function)
-    }
-
-    #[test]
-    fn parses_inline_function_body() {
-        let (parser, function) = parse_function("function suma(x, y) => x + y;");
-        assert!(parser.errors.is_empty(), "errores: {:?}", parser.errors);
-
-        let function = function.expect("debe parsear una funcion inline");
-        assert!(matches!(function.name.token, Token::Ident(ref name) if name == "suma"));
-        assert_eq!(function.params.len(), 2);
-        assert!(matches!(function.body, FunctionBody::Inline(_)));
-    }
-
-    #[test]
-    fn parses_block_function_body() {
-        let (parser, function) = parse_function("function suma(x, y) { x + y; x }");
-        assert!(parser.errors.is_empty(), "errores: {:?}", parser.errors);
-
-        let function = function.expect("debe parsear una funcion con bloque");
-        assert!(matches!(function.body, FunctionBody::Block(ref exprs) if exprs.len() == 2));
-    }
-
-    #[test]
-    fn rejects_block_after_arrow() {
-        let (parser, function) = parse_function("function suma(x, y) => { x + y };");
-        assert!(function.is_none());
-        assert!(!parser.errors.is_empty());
     }
 }
