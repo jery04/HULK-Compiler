@@ -110,7 +110,23 @@ fn print_function_def(func: &FunctionDef, indent: usize) {
 	println!("{}  Parámetros:", pad);
 	for param in &func.params {
 		if let crate::lexer::lexer::Token::Ident(pname) = &param.name.token {
-			println!("{}    - {}", pad, pname);
+			let ptype = match &param.ty {
+				Some(ty) => match &ty.token {
+					crate::lexer::lexer::Token::Ident(name)
+					| crate::lexer::lexer::Token::InternalIdent(name) => Some(name.clone()),
+					crate::lexer::lexer::Token::TypNumber => Some("Number".to_string()),
+					crate::lexer::lexer::Token::TypString => Some("String".to_string()),
+					crate::lexer::lexer::Token::TypBool => Some("Boolean".to_string()),
+					other => Some(format!("{:?}", other)),
+				},
+				None => None,
+			};
+
+			if let Some(ptype) = ptype {
+				println!("{}    - {}: {}", pad, pname, ptype);
+			} else {
+				println!("{}    - {}", pad, pname);
+			}
 		}
 	}
 	
@@ -131,7 +147,7 @@ fn print_function_def(func: &FunctionDef, indent: usize) {
 }
 
 fn test_function_definition() {
-	let src = "function suma(a, b) => a + b;";
+	let src = "function suma(a: Number, b: Number) => a + b;";
 	println!("\n=== PRUEBA 2: Definición de Función ===");
 	println!("Fuente: {}", src);
 
