@@ -45,7 +45,7 @@ fn print_factor(f: &Factor, indent: usize) {
 		Factor::Binary { left, op, right } => {
 			println!("{}Factor::Binary {:?}", pad, op);
 			print_factor(left, indent + 2);
-			print_expression(right, indent + 2);
+			print_factor(right, indent + 2);
 		}
 		Factor::Ident(id) => println!("{}Ident({})", pad, id),
 		Factor::Call { callee, args } => {
@@ -61,6 +61,10 @@ fn print_factor(f: &Factor, indent: usize) {
 			}
 		}
 		Factor::Const(c) => println!("{}Const {:?}", pad, c),
+		Factor::Unary { op, operand } => {
+			println!("{}Unary {:?}", pad, op);
+			print_factor(operand, indent + 2);
+		}
 	}
 }
 

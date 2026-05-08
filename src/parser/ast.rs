@@ -61,6 +61,11 @@ pub enum Factor {
         op: UnaryOp,
         operand: Box<Factor>,
     },
+    Binary {
+        left: Box<Factor>,
+        op: BinaryOp,
+        right: Box<Factor>,
+    },
     Const(ConstValue),
 }
 
