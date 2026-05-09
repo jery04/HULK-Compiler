@@ -606,11 +606,15 @@ impl<'src> Parser<'src> {
             }
 
             Token::LParen => {
+                // Capture '(' span, parse inner expression, capture ')' span,
+                // and extend the inner expression's span to cover the parentheses.
+                let lparen_span = self.current.span;
                 self.advance();
-                let expr = self.parse_expr()?;
-                self.expect(&Token::RParen, "expected ')' after expression")?;
-                // Preserve original span but note that parentheses are gone
-                Some(expr)
+                let inner = self.parse_expr()?;
+                let rparen = self.expect(&Token::RParen, "expected ')' after expression")?;
+                let span = Span { start: lparen_span.start, end: rparen.span.end };
+                let inner = Self::set_expr_span(inner, span);
+                Some(inner)
             }
 
             Token::LBrace => {
@@ -621,26 +625,14 @@ impl<'src> Parser<'src> {
                 self.parse_vector()
             }
 
-            // Phase 2: Binding and control flow (stubs)
-            Token::Let => {
-                self.error("'let' expression: not yet implemented");
-                None
-            }
+            // Phase 2: Binding and control flow
+            Token::Let => self.parse_let(),
 
-            Token::If => {
-                self.error("'if' expression: not yet implemented");
-                None
-            }
+            Token::If => self.parse_if(),
 
-            Token::While => {
-                self.error("'while' expression: not yet implemented");
-                None
-            }
+            Token::While => self.parse_while(),
 
-            Token::For => {
-                self.error("'for' expression: not yet implemented");
-                None
-            }
+            Token::For => self.parse_for(),
 
             _ => {
                 self.error("expected expression");
@@ -782,6 +774,217 @@ impl<'src> Parser<'src> {
         let rparen = self.expect(&Token::RParen, "expected ')' to close argument list")?;
 
         Some((args, rparen.span))
+    }
+
+    // -------------------------
+    // Phase 2 helpers & forms
+    // -------------------------
+
+    // Parse a simple TypeExpr for Phase 2 (Named, Iterable, Vector, Functor)
+    fn parse_type_expr(&mut self) -> Option<TypeExpr> {
+        // Functor type: (A, B) -> C
+        if self.check(&Token::LParen) {
+            self.expect(&Token::LParen, "expected '(' starting functor type")?;
+            let mut params = Vec::new();
+            // At least one type required inside functor params
+            params.push(self.parse_type_expr()?);
+            while self.matches(&Token::Comma) {
+                params.push(self.parse_type_expr()?);
+            }
+            self.expect(&Token::RParen, "expected ')' after functor param list")?;
+            self.expect(&Token::ThinArrow, "expected '->' after functor param list")?;
+            let returns = self.parse_type_expr()?;
+            return Some(TypeExpr::Functor { params, returns: Box::new(returns) });
+        }
+
+        // Named types and postfix operators
+        match self.peek().clone() {
+            Token::Ident(name) => {
+                let name = name.clone();
+                let _name_span = self.current.span;
+                self.advance();
+
+                // Iterable: IDENT '*'
+                if self.matches(&Token::Star) {
+                    return Some(TypeExpr::Iterable(Box::new(TypeExpr::Named(name))));
+                }
+
+                // Vector: IDENT '[]'
+                if self.check(&Token::LBracket) {
+                    // consume '[' then expect ']'
+                    self.expect(&Token::LBracket, "expected '[' in type vector")?;
+                    self.expect(&Token::RBracket, "expected ']' in type vector")?;
+                    return Some(TypeExpr::Vector(Box::new(TypeExpr::Named(name))));
+                }
+
+                Some(TypeExpr::Named(name))
+            }
+            _ => {
+                self.error("expected type expression");
+                None
+            }
+        }
+    }
+
+    // Parse a single let binding: IDENT TypeAnnotation? '=' Expr
+    fn parse_let_binding(&mut self) -> Option<LetBinding> {
+        match self.peek().clone() {
+            Token::Ident(n) => {
+                let n = n.clone();
+                let name_span = self.current.span;
+                self.advance();
+                // Optional type annotation
+                let ty = if self.matches(&Token::Colon) {
+                    Some(self.parse_type_expr()?)
+                } else {
+                    None
+                };
+
+                // Expect '='
+                self.expect(&Token::Eq, "expected '=' in let binding")?;
+
+                let init = self.parse_expr()?;
+
+                let span = Span { start: name_span.start, end: init.span().end };
+
+                Some(LetBinding { name: n, ty, init: Box::new(init), span })
+            }
+            Token::InternalIdent(_) => {
+                self.error("internal identifiers not allowed in user code");
+                None
+            }
+            _ => {
+                self.error("expected identifier in let binding");
+                None
+            }
+        }
+    }
+
+    // Parse `let` expression: "let" LetBinding ("," LetBinding)* "in" Expr
+    fn parse_let(&mut self) -> Option<Expr> {
+        let start_span = self.current.span;
+        self.advance(); // consume 'let'
+
+        let mut bindings = Vec::new();
+        bindings.push(self.parse_let_binding()?);
+
+        while self.matches(&Token::Comma) {
+            bindings.push(self.parse_let_binding()?);
+        }
+
+        self.expect(&Token::In, "expected 'in' after let bindings")?;
+        let body = self.parse_expr()?;
+
+        let span = Span { start: start_span.start, end: body.span().end };
+        Some(Expr::Let { bindings, body: Box::new(body), span })
+    }
+
+    // Parse `if` expression with mandatory else: if (cond) then_expr (elif (cond) expr)* else expr
+    fn parse_if(&mut self) -> Option<Expr> {
+        let start_span = self.current.span;
+        self.advance(); // consume 'if'
+
+        self.expect(&Token::LParen, "expected '(' after 'if'")?;
+        let condition = self.parse_expr()?;
+        self.expect(&Token::RParen, "expected ')' after if condition")?;
+
+        let then_expr = self.parse_expr()?;
+
+        let mut elif_branches: Vec<ElifBranch> = Vec::new();
+        while self.check(&Token::Elif) {
+            self.advance();
+            self.expect(&Token::LParen, "expected '(' after 'elif'")?;
+            let cond = self.parse_expr()?;
+            self.expect(&Token::RParen, "expected ')' after elif condition")?;
+            let body = self.parse_expr()?;
+            let span = Span { start: cond.span().start, end: body.span().end };
+            elif_branches.push(ElifBranch { condition: Box::new(cond), body: Box::new(body), span });
+        }
+
+        self.expect(&Token::Else, "expected 'else' clause on if expression")?;
+        let else_expr = self.parse_expr()?;
+
+        let span = Span { start: start_span.start, end: else_expr.span().end };
+        Some(Expr::If {
+            condition: Box::new(condition),
+            then_expr: Box::new(then_expr),
+            elif_branches,
+            else_expr: Box::new(else_expr),
+            span,
+        })
+    }
+
+    // Parse `while` expression: while (cond) body
+    fn parse_while(&mut self) -> Option<Expr> {
+        let start_span = self.current.span;
+        self.advance(); // consume 'while'
+
+        self.expect(&Token::LParen, "expected '(' after 'while'")?;
+        let condition = self.parse_expr()?;
+        self.expect(&Token::RParen, "expected ')' after while condition")?;
+
+        let body = self.parse_expr()?;
+        let span = Span { start: start_span.start, end: body.span().end };
+        Some(Expr::While { condition: Box::new(condition), body: Box::new(body), span })
+    }
+
+    // Parse `for` expression: for (IDENT in Expr) Expr
+    fn parse_for(&mut self) -> Option<Expr> {
+        let start_span = self.current.span;
+        self.advance(); // consume 'for'
+
+        self.expect(&Token::LParen, "expected '(' after 'for'")?;
+
+        let var = match self.peek().clone() {
+            Token::Ident(name) => {
+                let n = name.clone();
+                self.advance();
+                n
+            }
+            _ => {
+                self.error("expected identifier in for loop header");
+                return None;
+            }
+        };
+
+        self.expect(&Token::In, "expected 'in' in for loop header")?;
+        let iterable = self.parse_expr()?;
+        self.expect(&Token::RParen, "expected ')' after for loop header")?;
+
+        let body = self.parse_expr()?;
+        let span = Span { start: start_span.start, end: body.span().end };
+        Some(Expr::For { var, iterable: Box::new(iterable), body: Box::new(body), span })
+    }
+
+    // Replace the span in an expression with `new_span`.
+    // This consumes `expr` and returns a new Expr with the same shape
+    // but updated span field. Keeps Boxed subexpressions intact.
+    fn set_expr_span(mut expr: Expr, new_span: Span) -> Expr {
+        match expr {
+            Expr::Number { value, .. } => Expr::Number { value, span: new_span },
+            Expr::StringLit { value, .. } => Expr::StringLit { value, span: new_span },
+            Expr::Bool { value, .. } => Expr::Bool { value, span: new_span },
+            Expr::Ident { name, .. } => Expr::Ident { name, span: new_span },
+            Expr::Call { callee, args, .. } => Expr::Call { callee, args, span: new_span },
+            Expr::New { type_name, args, .. } => Expr::New { type_name, args, span: new_span },
+            Expr::FieldAccess { object, field, .. } => Expr::FieldAccess { object, field, span: new_span },
+            Expr::MethodCall { object, method, args, .. } => Expr::MethodCall { object, method, args, span: new_span },
+            Expr::SelfRef { .. } => Expr::SelfRef { span: new_span },
+            Expr::Base { args, .. } => Expr::Base { args, span: new_span },
+            Expr::BinaryOp { op, left, right, .. } => Expr::BinaryOp { op, left, right, span: new_span },
+            Expr::UnaryOp { op, operand, .. } => Expr::UnaryOp { op, operand, span: new_span },
+            Expr::IsType { expr: e, ty, .. } => Expr::IsType { expr: e, ty, span: new_span },
+            Expr::AsType { expr: e, ty, .. } => Expr::AsType { expr: e, ty, span: new_span },
+            Expr::If { condition, then_expr, elif_branches, else_expr, .. } => Expr::If { condition, then_expr, elif_branches, else_expr, span: new_span },
+            Expr::While { condition, body, .. } => Expr::While { condition, body, span: new_span },
+            Expr::For { var, iterable, body, .. } => Expr::For { var, iterable, body, span: new_span },
+            Expr::Let { bindings, body, .. } => Expr::Let { bindings, body, span: new_span },
+            Expr::Assign { target, value, .. } => Expr::Assign { target, value, span: new_span },
+            Expr::Block { exprs, .. } => Expr::Block { exprs, span: new_span },
+            Expr::VectorLit { elements, .. } => Expr::VectorLit { elements, span: new_span },
+            Expr::VectorGen { element, var, iterable, .. } => Expr::VectorGen { element, var, iterable, span: new_span },
+            Expr::Index { object, index, .. } => Expr::Index { object, index, span: new_span },
+        }
     }
 }
 
