@@ -107,7 +107,6 @@ impl<'src> Parser<'src> {
 
     /// Synchronize to a safe point for error recovery (panic-mode).
     /// Skips tokens until a likely statement/declaration boundary is found.
-    #[allow(dead_code)]
     fn synchronize(&mut self) {
         self.advance();
         while !self.is_at_end() {
@@ -488,15 +487,25 @@ impl<'src> Parser<'src> {
                     };
                 }
 
-                // Phase 3: Type operations (is, as) — stub for now
+                // Phase 3: Type operations (is, as)
                 Token::Is => {
-                    self.error("'is' operator: not yet implemented");
-                    return None;
+                    self.advance();
+                    let (ty, end_span) = self.parse_type_expr()?;
+                    let span = Span {
+                        start: expr.span().start,
+                        end: end_span.end,
+                    };
+                    expr = Expr::IsType { expr: Box::new(expr), ty, span };
                 }
 
                 Token::As => {
-                    self.error("'as' operator: not yet implemented");
-                    return None;
+                    self.advance();
+                    let (ty, end_span) = self.parse_type_expr()?;
+                    let span = Span {
+                        start: expr.span().start,
+                        end: end_span.end,
+                    };
+                    expr = Expr::AsType { expr: Box::new(expr), ty, span };
                 }
 
                 _ => break,
@@ -780,44 +789,50 @@ impl<'src> Parser<'src> {
     // Phase 2 helpers & forms
     // -------------------------
 
-    // Parse a simple TypeExpr for Phase 2 (Named, Iterable, Vector, Functor)
-    fn parse_type_expr(&mut self) -> Option<TypeExpr> {
+    // Parse a simple TypeExpr for Phase 2/3 (Named, Iterable, Vector, Functor)
+    // Returns (TypeExpr, Span) where Span is the span of the last consumed token.
+    fn parse_type_expr(&mut self) -> Option<(TypeExpr, Span)> {
         // Functor type: (A, B) -> C
         if self.check(&Token::LParen) {
             self.expect(&Token::LParen, "expected '(' starting functor type")?;
             let mut params = Vec::new();
             // At least one type required inside functor params
-            params.push(self.parse_type_expr()?);
+            let (t, _) = self.parse_type_expr()?;
+            params.push(t);
             while self.matches(&Token::Comma) {
-                params.push(self.parse_type_expr()?);
+                let (t, _) = self.parse_type_expr()?;
+                params.push(t);
             }
             self.expect(&Token::RParen, "expected ')' after functor param list")?;
             self.expect(&Token::ThinArrow, "expected '->' after functor param list")?;
-            let returns = self.parse_type_expr()?;
-            return Some(TypeExpr::Functor { params, returns: Box::new(returns) });
+            let (returns, end_span) = self.parse_type_expr()?;
+            return Some((TypeExpr::Functor { params, returns: Box::new(returns) }, end_span));
         }
 
         // Named types and postfix operators
         match self.peek().clone() {
             Token::Ident(name) => {
                 let name = name.clone();
-                let _name_span = self.current.span;
+                let name_span = self.current.span;  // capture BEFORE advance
                 self.advance();
 
                 // Iterable: IDENT '*'
-                if self.matches(&Token::Star) {
-                    return Some(TypeExpr::Iterable(Box::new(TypeExpr::Named(name))));
+                if self.check(&Token::Star) {
+                    let star_span = self.current.span;  // capture BEFORE advance
+                    self.advance();
+                    return Some((TypeExpr::Iterable(Box::new(TypeExpr::Named(name))), star_span));
                 }
 
                 // Vector: IDENT '[]'
                 if self.check(&Token::LBracket) {
                     // consume '[' then expect ']'
                     self.expect(&Token::LBracket, "expected '[' in type vector")?;
-                    self.expect(&Token::RBracket, "expected ']' in type vector")?;
-                    return Some(TypeExpr::Vector(Box::new(TypeExpr::Named(name))));
+                    let rbracket = self.expect(&Token::RBracket, "expected ']' in type vector")?;
+                    return Some((TypeExpr::Vector(Box::new(TypeExpr::Named(name))), rbracket.span));
                 }
 
-                Some(TypeExpr::Named(name))
+                // Simple named type
+                Some((TypeExpr::Named(name), name_span))
             }
             _ => {
                 self.error("expected type expression");
@@ -835,7 +850,8 @@ impl<'src> Parser<'src> {
                 self.advance();
                 // Optional type annotation
                 let ty = if self.matches(&Token::Colon) {
-                    Some(self.parse_type_expr()?)
+                    let (t, _) = self.parse_type_expr()?;
+                    Some(t)
                 } else {
                     None
                 };
@@ -959,7 +975,7 @@ impl<'src> Parser<'src> {
     // Replace the span in an expression with `new_span`.
     // This consumes `expr` and returns a new Expr with the same shape
     // but updated span field. Keeps Boxed subexpressions intact.
-    fn set_expr_span(mut expr: Expr, new_span: Span) -> Expr {
+    fn set_expr_span(expr: Expr, new_span: Span) -> Expr {
         match expr {
             Expr::Number { value, .. } => Expr::Number { value, span: new_span },
             Expr::StringLit { value, .. } => Expr::StringLit { value, span: new_span },
@@ -985,6 +1001,366 @@ impl<'src> Parser<'src> {
             Expr::VectorGen { element, var, iterable, .. } => Expr::VectorGen { element, var, iterable, span: new_span },
             Expr::Index { object, index, .. } => Expr::Index { object, index, span: new_span },
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PHASE 3: TYPE OPERATIONS & DECLARATIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Parse a complete HULK program: decls followed by global expression.
+    pub fn parse_program(&mut self) -> Option<Program> {
+        let start_span = self.current.span;
+        let mut decls = Vec::new();
+
+        // Parse zero or more declarations (Function, Type, Protocol)
+        // On error, call synchronize() to recover and try next declaration
+        loop {
+            match self.peek() {
+                Token::Function => {
+                    match self.parse_func_decl() {
+                        Some(f) => decls.push(Decl::Function(f)),
+                        None => self.synchronize(),
+                    }
+                }
+                Token::Type => {
+                    match self.parse_type_decl() {
+                        Some(t) => decls.push(Decl::Type(t)),
+                        None => self.synchronize(),
+                    }
+                }
+                Token::Protocol => {
+                    match self.parse_protocol_decl() {
+                        Some(p) => decls.push(Decl::Protocol(p)),
+                        None => self.synchronize(),
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        // Parse mandatory global expression
+        let expr = self.parse_expr()?;
+
+        // Consume optional trailing semicolon
+        self.matches(&Token::Semicolon);
+
+        let span = Span { start: start_span.start, end: expr.span().end };
+        Some(Program { decls, expr: Box::new(expr), span })
+    }
+
+    // Parse a parameter for functions/methods/type params
+    fn parse_param(&mut self) -> Option<Param> {
+        let name = match self.peek().clone() {
+            Token::Ident(n) => n,
+            _ => {
+                self.error("expected parameter name");
+                return None;
+            }
+        };
+        let param_span = self.current.span;
+        self.advance();
+
+        let ty = if self.matches(&Token::Colon) {
+            let (t, _) = self.parse_type_expr()?;
+            Some(t)
+        } else {
+            None
+        };
+
+        Some(Param { name, ty, span: param_span })
+    }
+
+    /// Parse function declaration: "function" IDENT "(" ParamList ")" ReturnType? FuncBody
+    fn parse_func_decl(&mut self) -> Option<FuncDecl> {
+        let start_span = self.current.span;
+        self.expect(&Token::Function, "expected 'function'")?;
+
+        let name = match self.peek().clone() {
+            Token::Ident(n) => n,
+            _ => {
+                self.error("expected function name");
+                return None;
+            }
+        };
+        self.advance();
+
+        self.expect(&Token::LParen, "expected '(' after function name")?;
+
+        // Parse parameters
+        let mut params = Vec::new();
+        if !self.check(&Token::RParen) {
+            params.push(self.parse_param()?);
+            while self.matches(&Token::Comma) {
+                params.push(self.parse_param()?);
+            }
+        }
+        self.expect(&Token::RParen, "expected ')' after parameter list")?;
+
+        // Optional return type
+        let return_type = if self.matches(&Token::Colon) {
+            let (t, _) = self.parse_type_expr()?;
+            Some(t)
+        } else {
+            None
+        };
+
+        // Parse function body
+        let body = if self.matches(&Token::Arrow) {
+            // Inline: => expr;
+            let inline_expr = self.parse_expr()?;
+            self.expect(&Token::Semicolon, "expected ';' after inline function body")?;
+            FuncBody::Inline(Box::new(inline_expr))
+        } else if self.check(&Token::LBrace) {
+            // Block body
+            let block_expr = self.parse_block()?;
+            FuncBody::Block(Box::new(block_expr))
+        } else {
+            self.error("expected '=>' or '{' for function body");
+            return None;
+        };
+
+        // Use the body expression's span end instead of self.current.span.end
+        let body_end = match &body {
+            FuncBody::Inline(e) => e.span().end,
+            FuncBody::Block(e) => e.span().end,
+        };
+        let span = Span { start: start_span.start, end: body_end };
+        Some(FuncDecl { name, params, return_type, body, span })
+    }
+
+    /// Parse type declaration: "type" IDENT TypeArgs? Inheritance? "{" TypeMember* "}"
+    fn parse_type_decl(&mut self) -> Option<TypeDecl> {
+        let start_span = self.current.span;
+        self.expect(&Token::Type, "expected 'type'")?;
+
+        let name = match self.peek().clone() {
+            Token::Ident(n) => n,
+            _ => {
+                self.error("expected type name");
+                return None;
+            }
+        };
+        self.advance();
+
+        // Optional type parameters
+        let mut type_params = Vec::new();
+        if self.check(&Token::LParen) {
+            self.advance();
+            if !self.check(&Token::RParen) {
+                type_params.push(self.parse_param()?);
+                while self.matches(&Token::Comma) {
+                    type_params.push(self.parse_param()?);
+                }
+            }
+            self.expect(&Token::RParen, "expected ')' after type parameters")?;
+        }
+
+        // Optional inheritance clause
+        let inherits = if self.matches(&Token::Inherits) {
+            let parent = match self.peek().clone() {
+                Token::Ident(p) => p,
+                _ => {
+                    self.error("expected parent type name");
+                    return None;
+                }
+            };
+            self.advance();
+
+            // Optional constructor arguments
+            let args = if self.check(&Token::LParen) {
+                let (a, _) = self.parse_arg_list()?;
+                a
+            } else {
+                Vec::new()
+            };
+
+            let inh_span = Span { start: self.current.span.start, end: self.current.span.end };
+            Some(InheritsClause { parent, args, span: inh_span })
+        } else {
+            None
+        };
+
+        self.expect(&Token::LBrace, "expected '{' for type body")?;
+
+        // Parse members
+        let mut members = Vec::new();
+        while !self.check(&Token::RBrace) && !self.is_at_end() {
+            let member_start = self.current.span;
+
+            let member_name = match self.peek().clone() {
+                Token::Ident(n) => n,
+                _ => {
+                    self.error("expected member name");
+                    return None;
+                }
+            };
+            self.advance();
+
+            // Peek at next token to determine if method or attribute
+            match self.peek() {
+                Token::LParen => {
+                    // Method: name "(" ParamList ")" ReturnType? Body
+                    self.advance();
+                    let mut params = Vec::new();
+                    if !self.check(&Token::RParen) {
+                        params.push(self.parse_param()?);
+                        while self.matches(&Token::Comma) {
+                            params.push(self.parse_param()?);
+                        }
+                    }
+                    self.expect(&Token::RParen, "expected ')' after method parameters")?;
+
+                    let return_type = if self.matches(&Token::Colon) {
+                        let (t, _) = self.parse_type_expr()?;
+                        Some(t)
+                    } else {
+                        None
+                    };
+
+                    let body = if self.matches(&Token::Arrow) {
+                        let inline = self.parse_expr()?;
+                        self.expect(&Token::Semicolon, "expected ';' after method inline body")?;
+                        FuncBody::Inline(Box::new(inline))
+                    } else if self.check(&Token::LBrace) {
+                        let block = self.parse_block()?;
+                        FuncBody::Block(Box::new(block))
+                    } else {
+                        self.error("expected '=>' or '{' for method body");
+                        return None;
+                    };
+
+                    // Use the body expression's span end instead of self.current.span.end
+                    let method_end = match &body {
+                        FuncBody::Inline(e) => e.span().end,
+                        FuncBody::Block(e) => e.span().end,
+                    };
+                    let method_span = Span { start: member_start.start, end: method_end };
+                    members.push(TypeMember::Method(MethodDef { name: member_name, params, return_type, body, span: method_span }));
+                }
+                Token::Colon | Token::Eq => {
+                    // Attribute: name [":" TypeExpr] "=" Expr ";"
+                    let attr_type = if self.matches(&Token::Colon) {
+                        let (t, _) = self.parse_type_expr()?;
+                        Some(t)
+                    } else {
+                        None
+                    };
+
+                    self.expect(&Token::Eq, "expected '=' in attribute definition")?;
+                    let init = self.parse_expr()?;
+                    let semi = self.expect(&Token::Semicolon, "expected ';' after attribute initializer")?;
+
+                    let attr_span = Span { start: member_start.start, end: semi.span.end };
+                    members.push(TypeMember::Attribute(AttrDef { name: member_name, ty: attr_type, init: Box::new(init), span: attr_span }));
+                }
+                _ => {
+                    self.error("expected ':' or '=' or '(' after member name");
+                    return None;
+                }
+            }
+        }
+
+        let rbrace = self.expect(&Token::RBrace, "expected '}' after type body")?;
+        let span = Span { start: start_span.start, end: rbrace.span.end };
+        Some(TypeDecl { name, type_params, inherits, members, span })
+    }
+
+    /// Parse protocol declaration: "protocol" IDENT ["extends" IDENT] "{" MethodSig* "}"
+    fn parse_protocol_decl(&mut self) -> Option<ProtocolDecl> {
+        let start_span = self.current.span;
+        self.expect(&Token::Protocol, "expected 'protocol'")?;
+
+        let name = match self.peek().clone() {
+            Token::Ident(n) => n,
+            _ => {
+                self.error("expected protocol name");
+                return None;
+            }
+        };
+        self.advance();
+
+        // Optional extends clause
+        let extends = if self.matches(&Token::Extends) {
+            match self.peek().clone() {
+                Token::Ident(e) => {
+                    self.advance();
+                    Some(e)
+                }
+                _ => {
+                    self.error("expected parent protocol name");
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
+
+        self.expect(&Token::LBrace, "expected '{' for protocol body")?;
+
+        // Parse method signatures
+        let mut methods = Vec::new();
+        while !self.check(&Token::RBrace) && !self.is_at_end() {
+            let sig_start = self.current.span;
+
+            let method_name = match self.peek().clone() {
+                Token::Ident(n) => n,
+                _ => {
+                    self.error("expected method name in protocol");
+                    return None;
+                }
+            };
+            self.advance();
+
+            self.expect(&Token::LParen, "expected '(' after method name in protocol")?;
+
+            // Parse signature parameters
+            let mut sig_params = Vec::new();
+            if !self.check(&Token::RParen) {
+                let param_start = self.current.span;
+                let param_name = match self.peek().clone() {
+                    Token::Ident(n) => n,
+                    _ => {
+                        self.error("expected parameter name in protocol method");
+                        return None;
+                    }
+                };
+                self.advance();
+
+                self.expect(&Token::Colon, "expected ':' after parameter name in protocol")?;
+                let (param_ty, end_span) = self.parse_type_expr()?;
+                let p_span = Span { start: param_start.start, end: end_span.end };
+                sig_params.push(SigParam { name: param_name, ty: param_ty, span: p_span });
+
+                while self.matches(&Token::Comma) {
+                    let param_start = self.current.span;
+                    let pname = match self.peek().clone() {
+                        Token::Ident(n) => n,
+                        _ => {
+                            self.error("expected parameter name in protocol method");
+                            return None;
+                        }
+                    };
+                    self.advance();
+
+                    self.expect(&Token::Colon, "expected ':' after parameter name")?;
+                    let (pty, end_span) = self.parse_type_expr()?;
+                    let ps = Span { start: param_start.start, end: end_span.end };
+                    sig_params.push(SigParam { name: pname, ty: pty, span: ps });
+                }
+            }
+
+            self.expect(&Token::RParen, "expected ')' after protocol method parameters")?;
+            self.expect(&Token::Colon, "expected ':' for protocol method return type")?;
+            let (return_type, _) = self.parse_type_expr()?;
+            let semi = self.expect(&Token::Semicolon, "expected ';' after protocol method signature")?;
+
+            let sig_span = Span { start: sig_start.start, end: semi.span.end };
+            methods.push(MethodSig { name: method_name, params: sig_params, return_type, span: sig_span });
+        }
+
+        let rbrace = self.expect(&Token::RBrace, "expected '}' after protocol body")?;
+        let span = Span { start: start_span.start, end: rbrace.span.end };
+        Some(ProtocolDecl { name, extends, methods, span })
     }
 }
 
