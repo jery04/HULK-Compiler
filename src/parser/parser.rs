@@ -1,27 +1,26 @@
-use crate::lexer::lexer::{Token, SpannedToken, TokenStream};
-use crate::parser::ast::{BinaryOp, Expression, Factor, FunctionBody, FunctionDef, FunctionParam, Statement, Term, UnaryOp};
-use std::collections::HashMap;
+//! LL(1) Recursive Descent Parser for HULK
+//!
+//! Phase 1: Expression parsing
+//! Phases 2-4: Declarations and associated constructs (not yet implemented)
 
+use crate::lexer::lexer::{Token, SpannedToken, TokenStream, Span};
+use crate::parser::ast::*;
 
-// ---------------------------------------------
-// Parser
-// ---------------------------------------------
+// ══════════════════════════════════════════════════════════════════════════════
+// PARSER STRUCT AND SETUP
+// ══════════════════════════════════════════════════════════════════════════════
 
 pub struct Parser<'src> {
-    tokens: TokenStream<'src>,
+    tokens:  TokenStream<'src>,
     current: SpannedToken,
     pub errors: Vec<String>,
 }
 
+
 impl<'src> Parser<'src> {
-
-    // ---------------------------------------------
-    // Initialization
-    // ---------------------------------------------
-
+    /// Create a new parser from a token stream.
     pub fn new(mut tokens: TokenStream<'src>) -> Self {
         let first = tokens.next_token();
-
         Self {
             tokens,
             current: first,
@@ -29,10 +28,9 @@ impl<'src> Parser<'src> {
         }
     }
 
-
-    // ---------------------------------------------
-    // Core navigation
-    // ---------------------------------------------
+    // ──────────────────────────────────────────────────────────────────────────
+    // CORE NAVIGATION (unchanged from old parser)
+    // ──────────────────────────────────────────────────────────────────────────
 
     /// Advance to the next token.
     pub fn advance(&mut self) {
@@ -49,9 +47,9 @@ impl<'src> Parser<'src> {
         self.current.token == Token::Eof
     }
 
-    // ---------------------------------------------
-    // Basic matching
-    // ---------------------------------------------
+    // ──────────────────────────────────────────────────────────────────────────
+    // BASIC MATCHING (unchanged from old parser)
+    // ──────────────────────────────────────────────────────────────────────────
 
     /// Check exact token match.
     pub fn check(&self, token: &Token) -> bool {
@@ -80,29 +78,13 @@ impl<'src> Parser<'src> {
         None
     }
 
-    // ---------------------------------------------
-    // Kind matching
-    // ---------------------------------------------
+    // KIND MATCHING helpers removed in Phase 1 (not used).
 
-    /// Check by predicate.
-    pub fn check_kind(&self, f: fn(&Token) -> bool) -> bool {
-        f(&self.current.token)
-    }
+    // ──────────────────────────────────────────────────────────────────────────
+    // EXPECT AND ERROR HANDLING (unchanged from old parser)
+    // ──────────────────────────────────────────────────────────────────────────
 
-    /// Consume if the predicate matches.
-    pub fn match_kind(&mut self, f: fn(&Token) -> bool) -> bool {
-        if f(&self.current.token) {
-            self.advance();
-            true
-        } else {
-            false
-        }
-    }
-
-    // ---------------------------------------------
-    // Expect and errors
-    // ---------------------------------------------
-
+    /// Expect and consume a specific token, or record an error.
     pub fn expect(&mut self, expected: &Token, msg: &str) -> Option<SpannedToken> {
         if self.check(expected) {
             let tok = self.current.clone();
@@ -114,21 +96,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Expect by predicate.
-    pub fn expect_kind(
-        &mut self,
-        f: fn(&Token) -> bool,
-        msg: &str,
-    ) -> Option<SpannedToken> {
-        if f(&self.current.token) {
-            let tok = self.current.clone();
-            self.advance();
-            Some(tok)
-        } else {
-            self.error(msg);
-            None
-        }
-    }
+    // `expect_kind` removed in Phase 1; use `expect` or reintroduce when needed.
 
     /// Record a parsing error with the current token's span.
     fn error(&mut self, msg: &str) {
@@ -139,12 +107,13 @@ impl<'src> Parser<'src> {
 
     /// Synchronize to a safe point for error recovery (panic-mode).
     /// Skips tokens until a likely statement/declaration boundary is found.
+    #[allow(dead_code)]
     fn synchronize(&mut self) {
         self.advance();
         while !self.is_at_end() {
             match self.peek() {
-                // Recovery points: semicolon, closing brace, EOF, or start of new statement/declaration
-                Token::Semicolon | Token::RBrace | Token::Eof | Token::Function | Token::Let => {
+                Token::Semicolon | Token::RBrace | Token::Eof 
+                | Token::Function | Token::Type | Token::Protocol => {
                     break;
                 }
                 _ => {
@@ -154,333 +123,704 @@ impl<'src> Parser<'src> {
         }
     }
 
-    // ---------------------------------------------
-    // Function parsing
-    // ---------------------------------------------
+    // ══════════════════════════════════════════════════════════════════════════
+    // PHASE 1: EXPRESSION PARSING
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Parse a function definition, which starts with the 'function' keyword, followed by the name, parameters, and body.
-    pub fn parse_function(&mut self) -> Option<FunctionDef> {
-        self.expect(&Token::Function, "se esperaba 'function'")?;
-
-        let name = self.parse_identifier("se esperaba el nombre de la funcion")?;
-        let params = self.parse_function_params()?;
-
-        let body = if self.matches(&Token::Arrow) {
-            self.parse_function_inline_body()?
-        } else if self.check(&Token::LBrace) {
-            self.parse_function_block_body()?
-        } else {
-            self.error("se esperaba '=>' o '{' en el cuerpo de la funcion");
-            return None;
-        };
-
-        Some(FunctionDef { name, params, body })
+    /// Parse an expression. Entry point for expression parsing.
+    ///
+    /// **Precedence cascade:**
+    /// Expr → parse_assign
+    pub fn parse_expr(&mut self) -> Option<Expr> {
+        self.parse_assign()
     }
 
-    /// Parse the parameter list of a function, which is enclosed in parentheses and separated by commas.
-    fn parse_function_params(&mut self) -> Option<Vec<FunctionParam>> {
-        self.expect(&Token::LParen, "se esperaba '(' despues del nombre de la funcion")?;
+    /// Parse assignment (destructive assignment, right-associative).
+    ///
+    /// **Grammar:** IDENT ":=" parse_assign | OrExpr
+    ///
+    /// Parse OrExpr first, then check if result is Ident and next token is ":=".
+    fn parse_assign(&mut self) -> Option<Expr> {
+        let left = self.parse_or()?;
 
-        let mut params = Vec::new();
-        if !self.check(&Token::RParen) {
-            loop {
-                params.push(self.parse_function_param()?);
-
-                if self.matches(&Token::Comma) {
-                    continue;
-                }
-
-                break;
+        if self.matches(&Token::ColonAssign) {
+            if let Expr::Ident { name, .. } = &left {
+                let name = name.clone();
+                let value = self.parse_assign()?;
+                let span = Span {
+                    start: left.span().start,
+                    end: value.span().end,
+                };
+                return Some(Expr::Assign {
+                    target: name,
+                    value: Box::new(value),
+                    span,
+                });
+            } else {
+                self.error("assignment target must be a simple identifier");
+                return None;
             }
         }
 
-        self.expect(&Token::RParen, "se esperaba ')' al cerrar la lista de parametros")?;
-        Some(params)
+        Some(left)
     }
 
-    /// Parse a single function parameter, which consists of an identifier and an optional type annotation.
-    fn parse_function_param(&mut self) -> Option<FunctionParam> {
-        let name = self.parse_identifier("se esperaba un nombre de parametro")?;
-        let ty = if self.matches(&Token::Colon) {
-            Some(self.parse_type_name("se esperaba un tipo de parametro")?)
-        } else {
-            None
-        };
+    /// Parse logical OR (left-associative).
+    ///
+    /// **Grammar:** AndExpr ("|" AndExpr)*
+    fn parse_or(&mut self) -> Option<Expr> {
+        let mut left = self.parse_and()?;
 
-        Some(FunctionParam { name, ty })
-    }
-
-    /// Parse an inline function body, which is a single expression followed by a semicolon.
-    fn parse_function_inline_body(&mut self) -> Option<FunctionBody> {
-        let expr = self.parse_expr()?;
-        self.expect(&Token::Semicolon, "se esperaba ';' al final del cuerpo inline")?;
-        Some(FunctionBody::Inline(expr))
-    }
-
-    /// Parse a block function body, which is a series of expressions enclosed in braces and separated by semicolons.
-    fn parse_function_block_body(&mut self) -> Option<FunctionBody> {
-        self.expect(&Token::LBrace, "se esperaba '{' para abrir el cuerpo de la funcion")?;
-
-        let mut expressions = Vec::new();
-        if self.check(&Token::RBrace) {
-            self.error("el cuerpo de la funcion no puede estar vacio");
-            return None;
-        }
-
-        loop {
-            let expr = self.parse_expr()?;
-            expressions.push(expr);
-
-            if self.matches(&Token::Semicolon) {
-                if self.check(&Token::RBrace) {
-                    break;
-                }
-                continue;
-            }
-
-            break;
-        }
-
-        self.expect(&Token::RBrace, "se esperaba '}' al cerrar el cuerpo de la funcion")?;
-        Some(FunctionBody::Block(expressions))
-    }
-
-    /// Parse an expression, which can be a term or a binary operation of terms.
-    fn parse_identifier(&mut self, msg: &str) -> Option<SpannedToken> {
-        match self.peek() {
-            Token::Ident(_) | Token::InternalIdent(_) => {
-                let tok = self.current.clone();
-                self.advance();
-                Some(tok)
-            }
-            _ => {
-                self.error(msg);
-                None
-            }
-        }
-    }
-
-    /// Parse a type name, which can be an identifier or a built-in type keyword.
-    fn parse_type_name(&mut self, msg: &str) -> Option<SpannedToken> {
-        match self.peek() {
-            Token::Ident(name) | Token::InternalIdent(name) => {
-                let _ = name;
-                let tok = self.current.clone();
-                self.advance();
-                Some(tok)
-            }
-            _ => {
-                self.error(msg);
-                None
-            }
-        }
-    }
-
-
-    // ---------------------------------------------
-    // Expression parsing
-    // ---------------------------------------------
-
-    /// Parse an expression with correct operator precedence (left-associative for +/-).
-    pub fn parse_expr(&mut self) -> Option<Expression> {
-        let mut left = Expression::Term(self.parse_term()?);
-
-        // Loop for left-associativity: a + b + c = ((a + b) + c)
-        while let Some(op_tok) = self.match_any(&[Token::Plus, Token::Minus]) {
-            let op = Self::binary_op_from_token(&op_tok.token)?;
-            let right = Expression::Term(self.parse_term()?);
-            left = Expression::Binary {
+        while self.matches(&Token::Pipe) {
+            let right = self.parse_and()?;
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            left = Expr::BinaryOp {
+                op: BinOp::Or,
                 left: Box::new(left),
-                op,
                 right: Box::new(right),
+                span,
             };
         }
 
         Some(left)
     }
 
-    /// Parse a let statement: let x = expr, y = expr in body_expr
-    pub fn parse_let(&mut self) -> Option<Statement> {
-        self.expect(&Token::Let, "se esperaba 'let'")?;
+    /// Parse logical AND (left-associative).
+    ///
+    /// **Grammar:** NotExpr ("&" NotExpr)*
+    fn parse_and(&mut self) -> Option<Expr> {
+        let mut left = self.parse_not()?;
 
-        // Parse assignments: x = expr, y = expr, ...
-        let mut assignments = HashMap::new();
-
-        loop {
-            let name = self.parse_identifier("se esperaba nombre de variable en asignación")?;
-            self.expect(&Token::Eq, "se esperaba '=' en asignación")?;
-            let expr = self.parse_expr()?;
-
-            assignments.insert(name, expr);
-
-            if self.matches(&Token::Comma) {
-                continue;
-            }
-
-            break;
-        }
-
-        // Expect 'in'
-        self.expect(&Token::In, "se esperaba 'in' después de las asignaciones")?;
-
-        // Parse body expression
-        let body = Box::new(self.parse_expr()?);
-
-        let _ = self.matches(&Token::Semicolon);
-
-        Some(Statement::Assign {
-            assignments,
-            body,
-        })
-    }
-
-    /// Parse a term with left-associativity for * and /.
-    pub fn parse_term(&mut self) -> Option<Term> {
-        let mut left = Term::Factor(self.parse_power()?);
-
-        // Loop for left-associativity: a * b * c = ((a * b) * c)
-        while let Some(op_tok) = self.match_any(&[Token::Star, Token::Slash]) {
-            let op = Self::binary_op_from_token(&op_tok.token)?;
-            let right = Term::Factor(self.parse_power()?);
-            left = Term::Binary {
+        while self.matches(&Token::Amp) {
+            let right = self.parse_not()?;
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            left = Expr::BinaryOp {
+                op: BinOp::And,
                 left: Box::new(left),
-                op,
                 right: Box::new(right),
+                span,
             };
         }
 
         Some(left)
     }
 
-    /// Parse power (exponentiation) with right-associativity.
-    /// Power has higher precedence than multiplication/division.
-    /// NOTE: Current implementation does NOT handle ^. This requires AST redesign
-    /// to represent power without Factor::Binary. For now, ^ will produce an error.
-    /// TODO: Add Factor::Power node or refactor to use Term level for power.
-    fn parse_power(&mut self) -> Option<Factor> {
-        self.parse_unary()
+    /// Parse logical NOT (prefix, right-associative).
+    ///
+    /// **Grammar:** "!" NotExpr | CmpExpr
+    fn parse_not(&mut self) -> Option<Expr> {
+        if self.check(&Token::Bang) {
+            let start = self.current.span;
+            self.advance();
+            let operand = self.parse_not()?;
+            let span = Span {
+                start: start.start,
+                end: operand.span().end,
+            };
+            return Some(Expr::UnaryOp {
+                op: UnaryOp::Not,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+
+        self.parse_cmp()
     }
 
-    /// Parse unary expressions (prefix operators like -, +).
-    fn parse_unary(&mut self) -> Option<Factor> {
-        if let Some(op_tok) = self.match_any(&[Token::Minus, Token::Plus]) {
+    /// Parse comparison (non-associative, single operator only).
+    ///
+    /// **Grammar:** CatExpr (("==" | "!=" | "<" | ">" | "<=" | ">=") CatExpr)?
+    fn parse_cmp(&mut self) -> Option<Expr> {
+        let left = self.parse_cat()?;
+
+        // Try to match a comparison operator
+        if let Some(op_tok) = self.match_any(&[
+            Token::EqEq,
+            Token::BangEq,
+            Token::Lt,
+            Token::Gt,
+            Token::LtEq,
+            Token::GtEq,
+        ]) {
             let op = match op_tok.token {
-                Token::Minus => UnaryOp::Neg,
-                Token::Plus => UnaryOp::Pos,
+                Token::EqEq => BinOp::Eq,
+                Token::BangEq => BinOp::NotEq,
+                Token::Lt => BinOp::Lt,
+                Token::Gt => BinOp::Gt,
+                Token::LtEq => BinOp::LtEq,
+                Token::GtEq => BinOp::GtEq,
                 _ => unreachable!(),
             };
-            let operand = Box::new(self.parse_unary()?);
-            return Some(Factor::Unary { op, operand });
+
+            let right = self.parse_cat()?;
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            return Some(Expr::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            });
         }
 
-        self.parse_factor()
+        Some(left)
     }
 
-    /// Parse a factor (primary expression): number, ident, grouped expr, call, builtin, constant.
-    pub fn parse_factor(&mut self) -> Option<Factor> {
-        let base = match self.peek() {
+    /// Parse string concatenation (left-associative).
+    ///
+    /// **Grammar:** AddExpr (("@" | "@@") AddExpr)*
+    fn parse_cat(&mut self) -> Option<Expr> {
+        let mut left = self.parse_add()?;
+
+        while let Some(op_tok) = self.match_any(&[Token::At, Token::ConcatSpace]) {
+            let op = match op_tok.token {
+                Token::At => BinOp::Concat,
+                Token::ConcatSpace => BinOp::ConcatSpace,
+                _ => unreachable!(),
+            };
+
+            let right = self.parse_add()?;
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            left = Expr::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Some(left)
+    }
+
+    /// Parse addition and subtraction (left-associative).
+    ///
+    /// **Grammar:** MulExpr (("+" | "-") MulExpr)*
+    fn parse_add(&mut self) -> Option<Expr> {
+        let mut left = self.parse_mul()?;
+
+        while let Some(op_tok) = self.match_any(&[Token::Plus, Token::Minus]) {
+            let op = match op_tok.token {
+                Token::Plus => BinOp::Add,
+                Token::Minus => BinOp::Sub,
+                _ => unreachable!(),
+            };
+
+            let right = self.parse_mul()?;
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            left = Expr::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Some(left)
+    }
+
+    /// Parse multiplication, division, and modulo (left-associative).
+    ///
+    /// **Grammar:** PowerExpr (("*" | "/" | "%") PowerExpr)*
+    fn parse_mul(&mut self) -> Option<Expr> {
+        let mut left = self.parse_power()?;
+
+        while let Some(op_tok) = self.match_any(&[Token::Star, Token::Slash, Token::Percent]) {
+            let op = match op_tok.token {
+                Token::Star => BinOp::Mul,
+                Token::Slash => BinOp::Div,
+                Token::Percent => BinOp::Mod,
+                _ => unreachable!(),
+            };
+
+            let right = self.parse_power()?;
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            left = Expr::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+
+        Some(left)
+    }
+
+    /// Parse exponentiation (right-associative).
+    ///
+    /// **Grammar:** UnaryExpr ("^" PowerExpr)?
+    ///
+    /// Right-associativity is implemented via direct recursion.
+    fn parse_power(&mut self) -> Option<Expr> {
+        let left = self.parse_unary()?;
+
+        if self.matches(&Token::Caret) {
+            let right = self.parse_power()?; // Right-associative recursion
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            return Some(Expr::BinaryOp {
+                op: BinOp::Pow,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            });
+        }
+
+        Some(left)
+    }
+
+    /// Parse unary minus (prefix, right-associative).
+    ///
+    /// **Grammar:** "-" UnaryExpr | PostfixExpr
+    fn parse_unary(&mut self) -> Option<Expr> {
+        if self.check(&Token::Minus) {
+            let start = self.current.span;
+            self.advance();
+            let operand = self.parse_unary()?;
+            let span = Span {
+                start: start.start,
+                end: operand.span().end,
+            };
+            return Some(Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+
+        self.parse_postfix()
+    }
+
+    /// Parse postfix operations (left-associative): field access, method calls, indexing.
+    ///
+    /// **Grammar:** PrimaryExpr
+    ///             ( "." IDENT ("(" ArgList ")")?
+    ///             | "[" Expr "]"
+    ///             | "is" TypeExpr     (Phase 3)
+    ///             | "as" TypeExpr     (Phase 3)
+    ///             )*
+    fn parse_postfix(&mut self) -> Option<Expr> {
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            match self.peek() {
+                Token::Dot => {
+                    self.advance();
+                    let field_span = self.current.span;
+                    let field_name = match self.peek() {
+                        Token::Ident(name) => {
+                            let n = name.clone();
+                            self.advance();
+                            n
+                        }
+                        _ => {
+                            self.error("expected field name after '.'");
+                            return None;
+                        }
+                    };
+
+                    // Check if this is a method call
+                    if self.check(&Token::LParen) {
+                        // Parse arguments inline to capture RParen span
+                        self.expect(&Token::LParen, "expected '('")?;
+                        let mut args = Vec::new();
+                        while !self.check(&Token::RParen) && !self.is_at_end() {
+                            args.push(self.parse_expr()?);
+                            if !self.matches(&Token::Comma) {
+                                break;
+                            }
+                        }
+                        let rparen_tok = self.expect(&Token::RParen, "expected ')' to close argument list")?;
+                        
+                        let span = Span {
+                            start: expr.span().start,
+                            end: rparen_tok.span.end,
+                        };
+                        expr = Expr::MethodCall {
+                            object: Box::new(expr),
+                            method: field_name,
+                            args,
+                            span,
+                        };
+                    } else {
+                        let span = Span {
+                            start: expr.span().start,
+                            end: field_span.end,
+                        };
+                        expr = Expr::FieldAccess {
+                            object: Box::new(expr),
+                            field: field_name,
+                            span,
+                        };
+                    }
+                }
+
+                Token::LBracket => {
+                    self.advance();
+                    let index = self.parse_expr()?;
+                    let rbracket_tok = self.expect(&Token::RBracket, "expected ']' after index expression")?;
+                    let span = Span {
+                        start: expr.span().start,
+                        end: rbracket_tok.span.end,
+                    };
+                    expr = Expr::Index {
+                        object: Box::new(expr),
+                        index: Box::new(index),
+                        span,
+                    };
+                }
+
+                // Phase 3: Type operations (is, as) — stub for now
+                Token::Is => {
+                    self.error("'is' operator: not yet implemented");
+                    return None;
+                }
+
+                Token::As => {
+                    self.error("'as' operator: not yet implemented");
+                    return None;
+                }
+
+                _ => break,
+            }
+        }
+
+        Some(expr)
+    }
+
+    /// Parse primary expressions (terminals and constructs).
+    ///
+    /// **Grammar:** NUMBER | STRING | "true" | "false" | "self" | IDENT ("(" ArgList ")")?
+    ///            | "base" ("(" ArgList ")")?
+    ///            | "new" IDENT ("(" ArgList ")")?
+    ///            | "(" Expr ")"
+    ///            | Block
+    ///            | VectorExpr
+    ///            | LetExpr (Phase 2)
+    ///            | IfExpr (Phase 2)
+    ///            | WhileExpr (Phase 2)
+    ///            | ForExpr (Phase 2)
+    fn parse_primary(&mut self) -> Option<Expr> {
+        let span = self.current.span;
+
+        match self.peek().clone() {
             Token::Number(value) => {
                 let value = value.clone();
                 self.advance();
-                Factor::Number(value)
+                Some(Expr::Number { value, span })
             }
 
-            Token::Ident(name) | Token::InternalIdent(name) => {
+            Token::StringLit(value) => {
+                let value = value.clone();
+                self.advance();
+                Some(Expr::StringLit { value, span })
+            }
+
+            Token::True => {
+                self.advance();
+                Some(Expr::Bool { value: true, span })
+            }
+
+            Token::False => {
+                self.advance();
+                Some(Expr::Bool { value: false, span })
+            }
+
+            Token::SelfKw => {
+                self.advance();
+                Some(Expr::SelfRef { span })
+            }
+
+            Token::Ident(name) => {
                 let name = name.clone();
                 self.advance();
-                
-                // Check if this is a function call: Ident followed by (
+
+                // Check for function call
                 if self.check(&Token::LParen) {
-                    self.advance();
-                    let mut args = Vec::new();
-                    if !self.check(&Token::RParen) {
-                        loop {
-                            let expr = self.parse_expr()?;
-                            args.push(expr);
-                            if self.matches(&Token::Comma) {
-                                continue;
-                            }
-                            break;
-                        }
-                    }
-                    self.expect(&Token::RParen, "se esperaba ')' al cerrar llamada")?;
-                    Factor::Call { callee: name, args }
+                    let (args, rparen_span) = self.parse_arg_list()?;
+                    let span = Span {
+                        start: span.start,
+                        end: rparen_span.end,
+                    };
+                    Some(Expr::Call {
+                        callee: Box::new(Expr::Ident { name, span }),
+                        args,
+                        span,
+                    })
                 } else {
-                    Factor::Ident(name)
+                    Some(Expr::Ident { name, span })
                 }
+            }
+
+            Token::Base => {
+                self.advance();
+                let (args, rparen_span) = self.parse_arg_list()?;
+                let span = Span {
+                    start: span.start,
+                    end: rparen_span.end,
+                };
+                Some(Expr::Base { args, span })
+            }
+
+            Token::New => {
+                self.advance();
+                let type_name = match self.peek() {
+                    Token::Ident(name) => {
+                        let n = name.clone();
+                        self.advance();
+                        n
+                    }
+                    _ => {
+                        self.error("expected type name after 'new'");
+                        return None;
+                    }
+                };
+                    let (args, rparen_span) = self.parse_arg_list()?;
+                    let span = Span {
+                        start: span.start,
+                        end: rparen_span.end,
+                    };
+                Some(Expr::New {
+                    type_name,
+                    args,
+                    span,
+                })
             }
 
             Token::LParen => {
                 self.advance();
                 let expr = self.parse_expr()?;
-                self.expect(&Token::RParen, "se esperaba ')' al cerrar expresion")?;
-                Factor::Group(Box::new(expr))
+                self.expect(&Token::RParen, "expected ')' after expression")?;
+                // Preserve original span but note that parentheses are gone
+                Some(expr)
             }
 
-            Token::True => {
-                self.advance();
-                Factor::Ident("true".to_string())
+            Token::LBrace => {
+                self.parse_block()
             }
-            Token::False => {
-                self.advance();
-                Factor::Ident("false".to_string())
+
+            Token::LBracket => {
+                self.parse_vector()
+            }
+
+            // Phase 2: Binding and control flow (stubs)
+            Token::Let => {
+                self.error("'let' expression: not yet implemented");
+                None
+            }
+
+            Token::If => {
+                self.error("'if' expression: not yet implemented");
+                None
+            }
+
+            Token::While => {
+                self.error("'while' expression: not yet implemented");
+                None
+            }
+
+            Token::For => {
+                self.error("'for' expression: not yet implemented");
+                None
             }
 
             _ => {
-                self.error("se esperaba un factor");
-                return None;
+                self.error("expected expression");
+                None
             }
+        }
+    }
+
+    /// Parse a block expression: "{" ( Expr ";" )* Expr "}"
+    ///
+    /// **Grammar:** "{" ( Expr ";" )* Expr? "}"
+    ///
+    /// The block value is the last expression (or unit if empty, which is a semantic error).
+    /// Empty blocks are reported as an error.
+    fn parse_block(&mut self) -> Option<Expr> {
+        let start_span = self.current.span;
+        self.expect(&Token::LBrace, "expected '{'")?;
+
+        let mut exprs = Vec::new();
+
+        while !self.check(&Token::RBrace) && !self.is_at_end() {
+            let expr = self.parse_expr()?;
+            exprs.push(expr);
+
+            // Consume optional semicolon
+            if !self.matches(&Token::Semicolon) {
+                // If no semicolon, we expect the next token to be RBrace
+                if !self.check(&Token::RBrace) {
+                    self.error("expected ';' or '}' after block expression");
+                    return None;
+                }
+            }
+        }
+
+        let rbrace = self.expect(&Token::RBrace, "expected '}' to close block")?;
+
+        let span = Span {
+            start: start_span.start,
+            end: rbrace.span.end,
         };
 
-        Some(base)
+        Some(Expr::Block { exprs, span })
     }
 
-    /// Convert a token to a binary operator if it matches.
-    fn binary_op_from_token(token: &Token) -> Option<BinaryOp> {
-        match token {
-            Token::Plus => Some(BinaryOp::Add),
-            Token::Minus => Some(BinaryOp::Sub),
-            Token::Star => Some(BinaryOp::Mul),
-            Token::Slash => Some(BinaryOp::Div),
-            Token::Caret => Some(BinaryOp::Pow),
-            _ => None,
+    /// Parse a vector expression: "[" ... "]"
+    ///
+    /// **Grammar:**
+    /// - Literal: "[" Expr ("," Expr)* "]"
+    /// - Generator: "[" Expr "|" IDENT "in" Expr "]"
+    /// - Empty: "[]"
+    fn parse_vector(&mut self) -> Option<Expr> {
+        let start_span = self.current.span;
+        self.expect(&Token::LBracket, "expected '['")?;
+
+        // Check for empty vector
+        if self.check(&Token::RBracket) {
+            self.advance();
+            let span = Span {
+                start: start_span.start,
+                end: self.current.span.end,
+            };
+            return Some(Expr::VectorLit {
+                elements: vec![],
+                span,
+            });
         }
-    }
 
-    // =====================================================
-    // PUBLIC ENTRY POINT
-    // =====================================================
+        // Parse first element
+        let first_expr = self.parse_expr()?;
 
-    /// Parse a program: a sequence of top-level declarations (functions, statements).
-    /// Returns a vector of FunctionDef and consumes tokens until EOF.
-    /// Accumulates all errors encountered and continues parsing on error.
-    pub fn parse_program(&mut self) -> (Vec<FunctionDef>, Vec<String>) {
-        let mut functions = Vec::new();
-        let mut all_errors = Vec::new();
-
-        while !self.is_at_end() {
-            match self.peek() {
-                Token::Function => {
-                    // Parse function declaration
-                    if let Some(func) = self.parse_function() {
-                        functions.push(func);
-                    } else {
-                        all_errors.extend(self.errors.drain(..));
-                        self.synchronize();
-                    }
-                }
-                Token::Eof => {
-                    break;
+        // Check for generator pattern: "|"
+        if self.matches(&Token::Pipe) {
+            let var = match self.peek() {
+                Token::Ident(name) => {
+                    let n = name.clone();
+                    self.advance();
+                    n
                 }
                 _ => {
-                    self.error("se esperaba 'function' o fin de archivo");
-                    all_errors.extend(self.errors.drain(..));
-                    self.synchronize();
+                    self.error("expected variable name after '|'");
+                    return None;
                 }
+            };
+
+            self.expect(&Token::In, "expected 'in' after generator variable")?;
+            let iterable = self.parse_expr()?;
+            let rbracket = self.expect(&Token::RBracket, "expected ']' to close vector")?;
+
+            let span = Span {
+                start: start_span.start,
+                end: rbracket.span.end,
+            };
+
+            return Some(Expr::VectorGen {
+                element: Box::new(first_expr),
+                var,
+                iterable: Box::new(iterable),
+                span,
+            });
+        }
+
+        // Otherwise, parse as literal vector
+        let mut elements = vec![first_expr];
+
+        while self.matches(&Token::Comma) {
+            if self.check(&Token::RBracket) {
+                break;
+            }
+            elements.push(self.parse_expr()?);
+        }
+
+        let rbracket = self.expect(&Token::RBracket, "expected ']' to close vector")?;
+
+        let span = Span {
+            start: start_span.start,
+            end: rbracket.span.end,
+        };
+
+        Some(Expr::VectorLit { elements, span })
+    }
+
+    /// Parse an argument list: "(" (Expr ("," Expr)*)? ")"
+    ///
+    /// Helper for function/method calls and constructors.
+    /// Returns the parsed arguments and the span of the closing ")" token.
+    fn parse_arg_list(&mut self) -> Option<(Vec<Expr>, Span)> {
+        self.expect(&Token::LParen, "expected '('")?;
+
+        let mut args = Vec::new();
+
+        while !self.check(&Token::RParen) && !self.is_at_end() {
+            args.push(self.parse_expr()?);
+
+            if !self.matches(&Token::Comma) {
+                break;
             }
         }
 
-        all_errors.extend(self.errors.drain(..));
-        (functions, all_errors)
+        let rparen = self.expect(&Token::RParen, "expected ')' to close argument list")?;
+
+        Some((args, rparen.span))
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HELPER TRAIT: Span retrieval for Expr
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Trait to extract the span from any expression node.
+/// This is used during parsing to compute spans for binary operators, etc.
+trait HasSpan {
+    fn span(&self) -> Span;
+}
+
+impl HasSpan for Expr {
+    fn span(&self) -> Span {
+        match self {
+            Expr::Number { span, .. } => *span,
+            Expr::StringLit { span, .. } => *span,
+            Expr::Bool { span, .. } => *span,
+            Expr::Ident { span, .. } => *span,
+            Expr::Call { span, .. } => *span,
+            Expr::New { span, .. } => *span,
+            Expr::FieldAccess { span, .. } => *span,
+            Expr::MethodCall { span, .. } => *span,
+            Expr::SelfRef { span } => *span,
+            Expr::Base { span, .. } => *span,
+            Expr::BinaryOp { span, .. } => *span,
+            Expr::UnaryOp { span, .. } => *span,
+            Expr::IsType { span, .. } => *span,
+            Expr::AsType { span, .. } => *span,
+            Expr::If { span, .. } => *span,
+            Expr::While { span, .. } => *span,
+            Expr::For { span, .. } => *span,
+            Expr::Let { span, .. } => *span,
+            Expr::Assign { span, .. } => *span,
+            Expr::Block { span, .. } => *span,
+            Expr::VectorLit { span, .. } => *span,
+            Expr::VectorGen { span, .. } => *span,
+            Expr::Index { span, .. } => *span,
+        }
     }
 }

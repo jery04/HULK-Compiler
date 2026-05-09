@@ -2,241 +2,160 @@ mod lexer;
 mod parser;
 
 use crate::lexer::lexer::TokenStream;
-use crate::parser::{Parser, Expression, Term, Factor, FunctionDef, FunctionBody, Statement};
+use crate::parser::{Parser, Expr};
 
-fn print_expression(expr: &Expression, indent: usize) {
+fn print_expr(expr: &Expr, indent: usize) {
 	let pad = " ".repeat(indent);
 	match expr {
-		Expression::Term(t) => {
-			println!("{}Expression::Term", pad);
-			print_term(t, indent + 2);
-		}
-		Expression::Binary { left, op, right } => {
-			println!("{}Expression::Binary {:?}", pad, op);
-			print_expression(left, indent + 2);
-			print_expression(right, indent + 2);
-		}
-	}
-}
-
-fn print_term(term: &Term, indent: usize) {
-	let pad = " ".repeat(indent);
-	match term {
-		Term::Factor(f) => {
-			println!("{}Term::Factor", pad);
-			print_factor(f, indent + 2);
-		}
-		Term::Binary { left, op, right } => {
-			println!("{}Term::Binary {:?}", pad, op);
-			print_term(left, indent + 2);
-			print_term(right, indent + 2);
-		}
-	}
-}
-
-fn print_factor(f: &Factor, indent: usize) {
-	let pad = " ".repeat(indent);
-	match f {
-		Factor::Number(n) => println!("{}Number({})", pad, n),
-		Factor::Group(e) => {
-			println!("{}Group", pad);
-			print_expression(e, indent + 2);
-		}
-		Factor::Binary { left, op, right } => {
-			println!("{}Factor::Binary {:?}", pad, op);
-			print_factor(left, indent + 2);
-			print_factor(right, indent + 2);
-		}
-		Factor::Ident(id) => println!("{}Ident({})", pad, id),
-		Factor::Call { callee, args } => {
-			println!("{}Call {}", pad, callee);
-			for a in args {
-				print_expression(a, indent + 2);
+		Expr::Number { value, .. } => println!("{}Number({})", pad, value),
+		Expr::StringLit { value, .. } => println!("{}String(\"{}\")", pad, value),
+		Expr::Bool { value, .. } => println!("{}Bool({})", pad, value),
+		Expr::Ident { name, .. } => println!("{}Ident({})", pad, name),
+		Expr::Call { callee, args, .. } => {
+			println!("{}Call", pad);
+			print_expr(callee, indent + 2);
+			for arg in args {
+				print_expr(arg, indent + 2);
 			}
 		}
-		Factor::Unary { op, operand } => {
-			println!("{}Unary {:?}", pad, op);
-			print_factor(operand, indent + 2);
+		Expr::MethodCall { object, method, args, .. } => {
+			println!("{}{}.{}(...)", pad, "object", method);
+			print_expr(object, indent + 2);
+			for arg in args {
+				print_expr(arg, indent + 2);
+			}
+		}
+		Expr::FieldAccess { object, field, .. } => {
+			println!("{}{}.{}", pad, "object", field);
+			print_expr(object, indent + 2);
+		}
+		Expr::New { type_name, args, .. } => {
+			println!("{}new {}(...)", pad, type_name);
+			for arg in args {
+				print_expr(arg, indent + 2);
+			}
+		}
+		Expr::SelfRef { .. } => println!("{}self", pad),
+		Expr::Base { args, .. } => {
+			println!("{}base(...)", pad);
+			for arg in args {
+				print_expr(arg, indent + 2);
+			}
+		}
+		Expr::BinaryOp { op, left, right, .. } => {
+			println!("{}BinOp({:?})", pad, op);
+			print_expr(left, indent + 2);
+			print_expr(right, indent + 2);
+		}
+		Expr::UnaryOp { op, operand, .. } => {
+			println!("{}UnaryOp({:?})", pad, op);
+			print_expr(operand, indent + 2);
+		}
+		Expr::IsType { expr: e, ty, .. } => {
+			println!("{}is {:?}", pad, ty);
+			print_expr(e, indent + 2);
+		}
+		Expr::AsType { expr: e, ty, .. } => {
+			println!("{}as {:?}", pad, ty);
+			print_expr(e, indent + 2);
+		}
+		Expr::If { condition, then_expr, elif_branches, else_expr, .. } => {
+			println!("{}if", pad);
+			print_expr(condition, indent + 2);
+			print_expr(then_expr, indent + 2);
+			for _elif in elif_branches {
+				println!("{}elif", pad);
+			}
+			println!("{}else", pad);
+			print_expr(else_expr, indent + 2);
+		}
+		Expr::While { condition, body, .. } => {
+			println!("{}while", pad);
+			print_expr(condition, indent + 2);
+			print_expr(body, indent + 2);
+		}
+		Expr::For { var, iterable, body, .. } => {
+			println!("{}for {} in ", pad, var);
+			print_expr(iterable, indent + 2);
+			print_expr(body, indent + 2);
+		}
+		Expr::Let { bindings, body, .. } => {
+			println!("{}let", pad);
+			for _binding in bindings {
+				println!("{}  binding", pad);
+			}
+			print_expr(body, indent + 2);
+		}
+		Expr::Assign { target, value, .. } => {
+			println!("{}{} := ", pad, target);
+			print_expr(value, indent + 2);
+		}
+		Expr::Block { exprs, .. } => {
+			println!("{}Block", pad);
+			for e in exprs {
+				print_expr(e, indent + 2);
+			}
+		}
+		Expr::VectorLit { elements, .. } => {
+			println!("{}Vector[...]", pad);
+			for e in elements {
+				print_expr(e, indent + 2);
+			}
+		}
+		Expr::VectorGen { element, var, iterable, .. } => {
+			println!("{}Vector[{} | {} in ...]", pad, "e", var);
+			print_expr(element, indent + 2);
+			print_expr(iterable, indent + 2);
+		}
+		Expr::Index { object, index, .. } => {
+			println!("{}[index]", pad);
+			print_expr(object, indent + 2);
+			print_expr(index, indent + 2);
 		}
 	}
 }
 
-fn test_expression_example(src: &str) {
-	println!("=== PRUEBA 1: Expresión Matemática ===");
-	println!("Fuente: {}", src);
+fn test_expression(src: &str) {
+	println!("\n=== Test: Expression ===");
+	println!("Source: {}", src);
 
-	// Tokenización (muestra tokens y errores léxicos)
+	// Tokenization
 	let (tokens, lex_errors) = TokenStream::tokenize_all(src);
 	println!("\nTokens:");
 	for t in &tokens {
 		println!("  {:?} -> {}", t.token, t.span);
 	}
 	if !lex_errors.is_empty() {
-		println!("\nErrores léxicos:");
+		println!("\nLexer Errors:");
 		for e in &lex_errors {
 			println!("  {}", e);
 		}
 	}
 
-	// Parseo usando el parser
+	// Parse
 	let ts = TokenStream::new(src);
 	let mut parser = Parser::new(ts);
 	match parser.parse_expr() {
 		Some(expr) => {
-			println!("\nÁrbol AST:");
-			print_expression(&expr, 0);
+			println!("\nAST:");
+			print_expr(&expr, 0);
 		}
 		None => {
-			println!("\nError al parsear. Errores:");
+			println!("\nParser Error:");
 			for e in parser.errors {
 				println!("  {}", e);
 			}
-		}
-	}
-}
-
-fn print_function_def(func: &FunctionDef, indent: usize) {
-	let pad = " ".repeat(indent);
-	
-	// Extraer el nombre del token
-	if let crate::lexer::lexer::Token::Ident(name) = &func.name.token {
-		println!("{}FunctionDef: {}", pad, name);
-	}
-	
-	// Parámetros
-	println!("{}  Parámetros:", pad);
-	for param in &func.params {
-		if let crate::lexer::lexer::Token::Ident(pname) = &param.name.token {
-			let ptype = match &param.ty {
-				Some(ty) => match &ty.token {
-					crate::lexer::lexer::Token::Ident(name)
-					| crate::lexer::lexer::Token::InternalIdent(name) => Some(name.clone()),
-					other => Some(format!("{:?}", other)),
-				},
-				None => None,
-			};
-
-			if let Some(ptype) = ptype {
-				println!("{}    - {}: {}", pad, pname, ptype);
-			} else {
-				println!("{}    - {}", pad, pname);
-			}
-		}
-	}
-	
-	// Cuerpo
-	println!("{}  Cuerpo:", pad);
-	match &func.body {
-		FunctionBody::Inline(expr) => {
-			println!("{}    Inline:", pad);
-			print_expression(expr, indent + 6);
-		}
-		FunctionBody::Block(exprs) => {
-			println!("{}    Block:", pad);
-			for expr in exprs {
-				print_expression(expr, indent + 6);
-			}
-		}
-	}
-}
-
-fn test_function_definition() {
-	let src = "function suma(a: Number, b: Number) => a + b;";
-	println!("\n=== PRUEBA 2: Definición de Función ===");
-	println!("Fuente: {}", src);
-
-	// Tokenización (muestra tokens y errores léxicos)
-	let (tokens, lex_errors) = TokenStream::tokenize_all(src);
-	println!("\nTokens:");
-	for t in &tokens {
-		println!("  {:?} -> {}", t.token, t.span);
-	}
-	if !lex_errors.is_empty() {
-		println!("\nErrores léxicos:");
-		for e in &lex_errors {
-			println!("  {}", e);
-		}
-	}
-
-	// Parseo usando el parser
-	let ts = TokenStream::new(src);
-	let mut parser = Parser::new(ts);
-	match parser.parse_function() {
-		Some(func) => {
-			println!("\nÁrbol AST:");
-			print_function_def(&func, 0);
-		}
-		None => {
-			println!("\nError al parsear. Errores:");
-			for e in parser.errors {
-				println!("  {}", e);
-			}
-		}
-	}
-}
-
-fn test_let_in() {
-	let src = "let a = 1, b = 2 in a + b;";
-	println!("\n=== PRUEBA 3: Let-In ===");
-	println!("Fuente: {}", src);
-
-	// Tokenización (muestra tokens y errores léxicos)
-	let (tokens, lex_errors) = TokenStream::tokenize_all(src);
-	println!("\nTokens:");
-	for t in &tokens {
-		println!("  {:?} -> {}", t.token, t.span);
-	}
-	if !lex_errors.is_empty() {
-		println!("\nErrores léxicos:");
-		for e in &lex_errors {
-			println!("  {}", e);
-		}
-	}
-
-	// Parseo usando el parser (usamos parse_let para manejar la sentencia let-in)
-	let ts = TokenStream::new(src);
-	let mut parser = Parser::new(ts);
-	match parser.parse_let() {
-		Some(stmt) => {
-			println!("\nÁrbol AST:");
-			print_statement(&stmt, 0);
-		}
-		None => {
-			println!("\nError al parsear. Errores:");
-			for e in parser.errors {
-				println!("  {}", e);
-			}
-		}
-	}
-}
-
-fn print_statement(stmt: &Statement, indent: usize) {
-	let pad = " ".repeat(indent);
-	match stmt {
-		Statement::Assign { assignments, body } => {
-			println!("{}Statement::Assign", pad);
-			println!("{}  Assignments:", pad);
-			for (name_tok, expr) in assignments {
-				// extraer nombre
-				if let crate::lexer::lexer::Token::Ident(n) = &name_tok.token {
-					println!("{}    - {}:", pad, n);
-				} else if let crate::lexer::lexer::Token::InternalIdent(n) = &name_tok.token {
-					println!("{}    - {}:", pad, n);
-				} else {
-					println!("{}    - {:?}:", pad, name_tok.token);
-				}
-				print_expression(expr, indent + 6);
-			}
-			println!("{}  Body:", pad);
-			print_expression(body, indent + 4);
 		}
 	}
 }
 
 fn main() {
-	//test_expression_example("sin(2 * PI) ^ 2 + cos(3 * PI / log(4, 64))");
-	//test_expression_example("2*(3+4)");
-	//test_function_definition();
-	test_let_in();
+	test_expression("2 * (3 + 4)");
+	test_expression("1 + 2 * 3 ^ 2");
+	test_expression("[1, 2, 3]");
+	test_expression("x | y");
+	test_expression("a & b");
+	test_expression("-5");
+	test_expression("!true");
 }
 
