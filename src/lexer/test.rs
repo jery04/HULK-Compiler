@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use crate::lexer::lexer::*;
 
 /// Extrae solo los Token de un fuente, ignorando errores.

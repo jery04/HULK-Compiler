@@ -73,6 +73,27 @@ fn test_power_right_associative() {
     assert!(result.is_some(), "Power operator should parse with right-associativity");
 }
 
+#[test]
+fn test_power_with_parenthesized_left_grouping() {
+    let source = "function f() => (2 ^ 3) ^ 2;";
+    let result = parse_source(source);
+    assert!(result.is_some(), "Parenthesized power grouping should parse");
+}
+
+#[test]
+fn test_power_mixed_with_term_and_expr() {
+    let source = "function f() => 2 + 3 * 2 ^ 3;";
+    let result = parse_source(source);
+    assert!(result.is_some(), "Mixed precedence with +, *, ^ should parse");
+}
+
+#[test]
+fn test_basic_arithmetic_chain_parse() {
+    let source = "function f() => 7 + 5 - 3 * 2 / 1 % 4;";
+    let result = parse_source(source);
+    assert!(result.is_some(), "Basic arithmetic chain should parse");
+}
+
 // ============================================
 // UNARY OPERATOR TESTS
 // ============================================

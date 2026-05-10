@@ -2,6 +2,7 @@
 
 mod lexer;
 mod parser;
+mod evaluator;
 
 use crate::lexer::lexer::TokenStream;
 use crate::parser::{Parser, Expr};
