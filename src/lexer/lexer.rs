@@ -387,7 +387,6 @@ impl<'src> TokenStream<'src> {
 
     /// Fill internal buffer up to index `n` (0-based) by consuming the inner iterator.
     fn fill_buffer_up_to(&mut self, n: usize) {
-        use std::collections::VecDeque;
         while self.buffer.len() <= n {
             match self.inner.next() {
                 Some(Ok(tok)) => self.buffer.push_back(tok),
