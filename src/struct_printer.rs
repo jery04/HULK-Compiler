@@ -1,404 +1,912 @@
-use crate::lexer::lexer::{TokenStream, Span};
-use crate::parser::{Parser, Expr};
-use crate::parser::{Decl, FuncBody, FuncDecl, Param, Program, TypeExpr};
+use crate::lexer::lexer::{Span, TokenStream};
+use crate::parser::{Decl, Expr, FuncBody, FuncDecl, Param, Parser, Program, TypeExpr};
 
-fn print_type_expr(ty: &TypeExpr, indent: usize) {
-    let pad = " ".repeat(indent);
+#[derive(Clone)]
+struct TreePrinter {
+    prefix: String,
+    depth: usize,
+    is_last: bool,
+}
+
+impl TreePrinter {
+    fn root() -> Self {
+        Self {
+            prefix: String::new(),
+            depth: 0,
+            is_last: true,
+        }
+    }
+
+    fn child(&self, is_last: bool) -> Self {
+        let mut prefix = self.prefix.clone();
+        if self.depth > 0 {
+            if self.is_last {
+                prefix.push_str("    ");
+            } else {
+                prefix.push_str("|   ");
+            }
+        }
+        Self {
+            prefix,
+            depth: self.depth + 1,
+            is_last,
+        }
+    }
+
+    fn line(&self, label: &str) {
+        if self.depth == 0 {
+            println!("{}", label);
+        } else {
+            let connector = if self.is_last { "`-- " } else { "|-- " };
+            println!("{}{}{}", self.prefix, connector, label);
+        }
+    }
+}
+
+fn print_type_expr(ty: &TypeExpr, printer: &TreePrinter) {
     match ty {
-        TypeExpr::Named(name) => println!("{}Type::Named({})", pad, name),
+        TypeExpr::Named(name) => printer.line(&format!("Type::Named({})", name)),
         TypeExpr::Iterable(inner) => {
-            println!("{}Type::Iterable", pad);
-            print_type_expr(inner, indent + 2);
+            printer.line("Type::Iterable");
+            let child = printer.child(true);
+            print_type_expr(inner, &child);
         }
         TypeExpr::Vector(inner) => {
-            println!("{}Type::Vector", pad);
-            print_type_expr(inner, indent + 2);
+            printer.line("Type::Vector");
+            let child = printer.child(true);
+            print_type_expr(inner, &child);
         }
         TypeExpr::Functor { params, returns } => {
-            println!("{}Type::Functor", pad);
-            println!("{}  params", pad);
-            for param in params {
-                print_type_expr(param, indent + 4);
+            printer.line("Type::Functor");
+
+            let params_printer = printer.child(false);
+            if params.is_empty() {
+                params_printer.line("params: []");
+            } else {
+                params_printer.line("params");
+                for (idx, param) in params.iter().enumerate() {
+                    let child = params_printer.child(idx + 1 == params.len());
+                    print_type_expr(param, &child);
+                }
             }
-            println!("{}  returns", pad);
-            print_type_expr(returns, indent + 4);
+
+            let returns_printer = printer.child(true);
+            returns_printer.line("returns");
+            let child = returns_printer.child(true);
+            print_type_expr(returns, &child);
         }
     }
 }
 
-fn print_span(span: Span, indent: usize) {
-    let pad = " ".repeat(indent);
-    println!("{}span: {}", pad, span);
+fn print_span(span: Span, printer: &TreePrinter) {
+    printer.line(&format!("span: {}", span));
 }
 
-fn print_type_decl(ty: &crate::parser::TypeDecl, indent: usize) {
-    let pad = " ".repeat(indent);
-    println!("{}TypeDecl", pad);
-    println!("{}  name: {}", pad, ty.name);
-    if !ty.type_params.is_empty() {
-        println!("{}  type_params:", pad);
-        for p in &ty.type_params {
-            print_param(p, indent + 4);
-        }
+fn print_type_decl(ty: &crate::parser::TypeDecl, printer: &TreePrinter) {
+    printer.line("TypeDecl");
+
+    let name_printer = printer.child(false);
+    name_printer.line(&format!("name: {}", ty.name));
+
+    let type_params_printer = printer.child(false);
+    if ty.type_params.is_empty() {
+        type_params_printer.line("type_params: []");
     } else {
-        println!("{}  type_params: []", pad);
+        type_params_printer.line("type_params");
+        for (idx, param) in ty.type_params.iter().enumerate() {
+            let child = type_params_printer.child(idx + 1 == ty.type_params.len());
+            print_param(param, &child);
+        }
     }
+
+    let inherits_printer = printer.child(false);
     match &ty.inherits {
         Some(ic) => {
-            println!("{}  inherits:", pad);
-            println!("{}    parent: {}", pad, ic.parent);
-            if !ic.args.is_empty() {
-                println!("{}    args:", pad);
-                for a in &ic.args {
-                    print_expr(a, indent + 6);
-                }
+            inherits_printer.line("inherits");
+
+            let parent_printer = inherits_printer.child(false);
+            parent_printer.line(&format!("parent: {}", ic.parent));
+
+            let args_printer = inherits_printer.child(false);
+            if ic.args.is_empty() {
+                args_printer.line("args: []");
             } else {
-                println!("{}    args: []", pad);
+                args_printer.line("args");
+                for (idx, arg) in ic.args.iter().enumerate() {
+                    let child = args_printer.child(idx + 1 == ic.args.len());
+                    print_expr(arg, &child);
+                }
             }
-            print_span(ic.span, indent + 4);
+
+            let span_printer = inherits_printer.child(true);
+            print_span(ic.span, &span_printer);
         }
-        None => println!("{}  inherits: None", pad),
+        None => inherits_printer.line("inherits: None"),
     }
-    println!("{}  members:", pad);
-    for m in &ty.members {
-        match m {
-            crate::parser::TypeMember::Attribute(a) => {
-                println!("{}    Attribute", pad);
-                println!("{}      name: {}", pad, a.name);
-                match &a.ty {
-                    Some(t) => {
-                        println!("{}      ty:", pad);
-                        print_type_expr(t, indent + 8);
+
+    let members_printer = printer.child(false);
+    if ty.members.is_empty() {
+        members_printer.line("members: []");
+    } else {
+        members_printer.line("members");
+        for (idx, member) in ty.members.iter().enumerate() {
+            let child = members_printer.child(idx + 1 == ty.members.len());
+            match member {
+                crate::parser::TypeMember::Attribute(attr) => {
+                    child.line("Attribute");
+
+                    let name_printer = child.child(false);
+                    name_printer.line(&format!("name: {}", attr.name));
+
+                    let ty_printer = child.child(false);
+                    match &attr.ty {
+                        Some(attr_ty) => {
+                            ty_printer.line("ty");
+                            let inner = ty_printer.child(true);
+                            print_type_expr(attr_ty, &inner);
+                        }
+                        None => ty_printer.line("ty: None"),
                     }
-                    None => println!("{}      ty: None", pad),
+
+                    let init_printer = child.child(false);
+                    init_printer.line("init");
+                    let init_child = init_printer.child(true);
+                    print_expr(&attr.init, &init_child);
+
+                    let span_printer = child.child(true);
+                    print_span(attr.span, &span_printer);
                 }
-                println!("{}      init:", pad);
-                print_expr(&a.init, indent + 8);
-                print_span(a.span, indent + 6);
-            }
-            crate::parser::TypeMember::Method(mdef) => {
-                println!("{}    Method", pad);
-                print_method_def(mdef, indent + 6);
+                crate::parser::TypeMember::Method(method) => {
+                    child.line("Method");
+                    let method_printer = child.child(true);
+                    print_method_def(method, &method_printer);
+                }
             }
         }
     }
-    print_span(ty.span, indent + 2);
+
+    let span_printer = printer.child(true);
+    print_span(ty.span, &span_printer);
 }
 
-fn print_method_def(m: &crate::parser::MethodDef, indent: usize) {
-    let pad = " ".repeat(indent);
-    println!("{}MethodDef", pad);
-    println!("{}  name: {}", pad, m.name);
-    println!("{}  params:", pad);
-    for p in &m.params {
-        print_param(p, indent + 4);
+fn print_method_def(m: &crate::parser::MethodDef, printer: &TreePrinter) {
+    printer.line("MethodDef");
+
+    let name_printer = printer.child(false);
+    name_printer.line(&format!("name: {}", m.name));
+
+    let params_printer = printer.child(false);
+    if m.params.is_empty() {
+        params_printer.line("params: []");
+    } else {
+        params_printer.line("params");
+        for (idx, param) in m.params.iter().enumerate() {
+            let child = params_printer.child(idx + 1 == m.params.len());
+            print_param(param, &child);
+        }
     }
+
+    let return_printer = printer.child(false);
     match &m.return_type {
-        Some(t) => {
-            println!("{}  return_type:", pad);
-            print_type_expr(t, indent + 4);
+        Some(ty) => {
+            return_printer.line("return_type");
+            let child = return_printer.child(true);
+            print_type_expr(ty, &child);
         }
-        None => println!("{}  return_type: None", pad),
+        None => return_printer.line("return_type: None"),
     }
-    println!("{}  body:", pad);
-    print_func_body(&m.body, indent + 4);
-    print_span(m.span, indent + 2);
+
+    let body_printer = printer.child(false);
+    body_printer.line("body");
+    let body_child = body_printer.child(true);
+    print_func_body(&m.body, &body_child);
+
+    let span_printer = printer.child(true);
+    print_span(m.span, &span_printer);
 }
 
-fn print_protocol_decl(p: &crate::parser::ProtocolDecl, indent: usize) {
-    let pad = " ".repeat(indent);
-    println!("{}ProtocolDecl", pad);
-    println!("{}  name: {}", pad, p.name);
-    println!("{}  extends: {}", pad, p.extends.as_deref().unwrap_or("None"));
-    println!("{}  methods:", pad);
-    for m in &p.methods {
-        println!("{}    MethodSig", pad);
-        println!("{}      name: {}", pad, m.name);
-        println!("{}      params:", pad);
-        for sp in &m.params {
-            println!("{}        SigParam", pad);
-            println!("{}          name: {}", pad, sp.name);
-            match &sp.ty {
-                Some(t) => {
-                    println!("{}          ty:", pad);
-                    print_type_expr(t, indent + 12);
+fn print_protocol_decl(p: &crate::parser::ProtocolDecl, printer: &TreePrinter) {
+    printer.line("ProtocolDecl");
+
+    let name_printer = printer.child(false);
+    name_printer.line(&format!("name: {}", p.name));
+
+    let extends_printer = printer.child(false);
+    extends_printer.line(&format!(
+        "extends: {}",
+        p.extends.as_deref().unwrap_or("None")
+    ));
+
+    let methods_printer = printer.child(false);
+    if p.methods.is_empty() {
+        methods_printer.line("methods: []");
+    } else {
+        methods_printer.line("methods");
+        for (idx, method) in p.methods.iter().enumerate() {
+            let child = methods_printer.child(idx + 1 == p.methods.len());
+            child.line("MethodSig");
+
+            let name_printer = child.child(false);
+            name_printer.line(&format!("name: {}", method.name));
+
+            let params_printer = child.child(false);
+            if method.params.is_empty() {
+                params_printer.line("params: []");
+            } else {
+                params_printer.line("params");
+                for (sp_idx, sp) in method.params.iter().enumerate() {
+                    let sp_child = params_printer.child(sp_idx + 1 == method.params.len());
+                    sp_child.line("SigParam");
+
+                    let sp_name_printer = sp_child.child(false);
+                    sp_name_printer.line(&format!("name: {}", sp.name));
+
+                    let sp_ty_printer = sp_child.child(false);
+                    match &sp.ty {
+                        Some(ty) => {
+                            sp_ty_printer.line("ty");
+                            let inner = sp_ty_printer.child(true);
+                            print_type_expr(ty, &inner);
+                        }
+                        None => sp_ty_printer.line("ty: None"),
+                    }
+
+                    let sp_span_printer = sp_child.child(true);
+                    print_span(sp.span, &sp_span_printer);
                 }
-                None => println!("{}          ty: None", pad),
             }
-            print_span(sp.span, indent + 10);
-        }
-        println!("{}      return_type:", pad);
-        print_type_expr(&m.return_type, indent + 6);
-        print_span(m.span, indent + 4);
-    }
-    print_span(p.span, indent + 2);
-}
 
-fn print_macro_decl(m: &crate::parser::MacroDecl, indent: usize) {
-    let pad = " ".repeat(indent);
-    println!("{}MacroDecl", pad);
-    println!("{}  name: {}", pad, m.name);
-    println!("{}  params:", pad);
-    for mp in &m.params {
-        match mp {
-            crate::parser::MacroParam::Regular(p) => {
-                println!("{}    Regular", pad);
-                print_param(p, indent + 6);
-            }
-            crate::parser::MacroParam::Block { name, ty, span } => {
-                println!("{}    Block name: {}", pad, name);
-                println!("{}      ty:", pad);
-                print_type_expr(ty, indent + 8);
-                print_span(*span, indent + 6);
-            }
-            crate::parser::MacroParam::Symbolic { name, ty, span } => {
-                println!("{}    Symbolic name: {}", pad, name);
-                println!("{}      ty:", pad);
-                print_type_expr(ty, indent + 8);
-                print_span(*span, indent + 6);
-            }
-            crate::parser::MacroParam::Placeholder { name, ty, span } => {
-                println!("{}    Placeholder name: {}", pad, name);
-                println!("{}      ty:", pad);
-                print_type_expr(ty, indent + 8);
-                print_span(*span, indent + 6);
-            }
+            let return_printer = child.child(false);
+            return_printer.line("return_type");
+            let return_child = return_printer.child(true);
+            print_type_expr(&method.return_type, &return_child);
+
+            let span_printer = child.child(true);
+            print_span(method.span, &span_printer);
         }
     }
-    println!("{}  body:", pad);
-    print_func_body(&m.body, indent + 4);
-    print_span(m.span, indent + 2);
+
+    let span_printer = printer.child(true);
+    print_span(p.span, &span_printer);
 }
 
-fn print_param(param: &Param, indent: usize) {
-    let pad = " ".repeat(indent);
-    println!("{}Param", pad);
-    println!("{}  name: {}", pad, param.name);
+fn print_macro_decl(m: &crate::parser::MacroDecl, printer: &TreePrinter) {
+    printer.line("MacroDecl");
+
+    let name_printer = printer.child(false);
+    name_printer.line(&format!("name: {}", m.name));
+
+    let params_printer = printer.child(false);
+    if m.params.is_empty() {
+        params_printer.line("params: []");
+    } else {
+        params_printer.line("params");
+        for (idx, mp) in m.params.iter().enumerate() {
+            let child = params_printer.child(idx + 1 == m.params.len());
+            match mp {
+                crate::parser::MacroParam::Regular(param) => {
+                    child.line("Regular");
+                    let inner = child.child(true);
+                    print_param(param, &inner);
+                }
+                crate::parser::MacroParam::Block { name, ty, span } => {
+                    child.line("Block");
+
+                    let name_printer = child.child(false);
+                    name_printer.line(&format!("name: {}", name));
+
+                    let ty_printer = child.child(false);
+                    ty_printer.line("ty");
+                    let ty_child = ty_printer.child(true);
+                    print_type_expr(ty, &ty_child);
+
+                    let span_printer = child.child(true);
+                    print_span(*span, &span_printer);
+                }
+                crate::parser::MacroParam::Symbolic { name, ty, span } => {
+                    child.line("Symbolic");
+
+                    let name_printer = child.child(false);
+                    name_printer.line(&format!("name: {}", name));
+
+                    let ty_printer = child.child(false);
+                    ty_printer.line("ty");
+                    let ty_child = ty_printer.child(true);
+                    print_type_expr(ty, &ty_child);
+
+                    let span_printer = child.child(true);
+                    print_span(*span, &span_printer);
+                }
+                crate::parser::MacroParam::Placeholder { name, ty, span } => {
+                    child.line("Placeholder");
+
+                    let name_printer = child.child(false);
+                    name_printer.line(&format!("name: {}", name));
+
+                    let ty_printer = child.child(false);
+                    ty_printer.line("ty");
+                    let ty_child = ty_printer.child(true);
+                    print_type_expr(ty, &ty_child);
+
+                    let span_printer = child.child(true);
+                    print_span(*span, &span_printer);
+                }
+            }
+        }
+    }
+
+    let body_printer = printer.child(false);
+    body_printer.line("body");
+    let body_child = body_printer.child(true);
+    print_func_body(&m.body, &body_child);
+
+    let span_printer = printer.child(true);
+    print_span(m.span, &span_printer);
+}
+
+fn print_param(param: &Param, printer: &TreePrinter) {
+    printer.line("Param");
+
+    let name_printer = printer.child(false);
+    name_printer.line(&format!("name: {}", param.name));
+
+    let ty_printer = printer.child(false);
     match &param.ty {
         Some(ty) => {
-            println!("{}  ty:", pad);
-            print_type_expr(ty, indent + 2);
+            ty_printer.line("ty");
+            let inner = ty_printer.child(true);
+            print_type_expr(ty, &inner);
         }
-        None => println!("{}  ty: None", pad),
+        None => ty_printer.line("ty: None"),
     }
-    println!("{}  span: {}", pad, param.span);
+
+    let span_printer = printer.child(true);
+    print_span(param.span, &span_printer);
 }
 
-fn print_func_body(body: &FuncBody, indent: usize) {
-    let pad = " ".repeat(indent);
+fn print_func_body(body: &FuncBody, printer: &TreePrinter) {
     match body {
         FuncBody::Inline(expr) => {
-            println!("{}FuncBody::Inline", pad);
-            print_expr(expr, indent + 2);
+            printer.line("FuncBody::Inline");
+            let child = printer.child(true);
+            print_expr(expr, &child);
         }
         FuncBody::Block(expr) => {
-            println!("{}FuncBody::Block", pad);
-            print_expr(expr, indent + 2);
+            printer.line("FuncBody::Block");
+            let child = printer.child(true);
+            print_expr(expr, &child);
         }
     }
 }
 
-fn print_func_decl(func: &FuncDecl, indent: usize) {
-    let pad = " ".repeat(indent);
-    println!("{}FuncDecl", pad);
-    println!("{}  name: {}", pad, func.name);
-    println!("{}  params:", pad);
-    for param in &func.params {
-        print_param(param, indent + 4);
+fn print_func_decl(func: &FuncDecl, printer: &TreePrinter) {
+    printer.line("FuncDecl");
+
+    let name_printer = printer.child(false);
+    name_printer.line(&format!("name: {}", func.name));
+
+    let params_printer = printer.child(false);
+    if func.params.is_empty() {
+        params_printer.line("params: []");
+    } else {
+        params_printer.line("params");
+        for (idx, param) in func.params.iter().enumerate() {
+            let child = params_printer.child(idx + 1 == func.params.len());
+            print_param(param, &child);
+        }
     }
+
+    let return_printer = printer.child(false);
     match &func.return_type {
         Some(ty) => {
-            println!("{}  return_type:", pad);
-            print_type_expr(ty, indent + 4);
+            return_printer.line("return_type");
+            let child = return_printer.child(true);
+            print_type_expr(ty, &child);
         }
-        None => println!("{}  return_type: None", pad),
+        None => return_printer.line("return_type: None"),
     }
-    println!("{}  body:", pad);
-    print_func_body(&func.body, indent + 4);
-    println!("{}  span: {}", pad, func.span);
+
+    let body_printer = printer.child(false);
+    body_printer.line("body");
+    let body_child = body_printer.child(true);
+    print_func_body(&func.body, &body_child);
+
+    let span_printer = printer.child(true);
+    print_span(func.span, &span_printer);
 }
 
-fn print_decl(decl: &Decl, indent: usize) {
-    let pad = " ".repeat(indent);
+fn print_decl(decl: &Decl, printer: &TreePrinter) {
     match decl {
         Decl::Function(func) => {
-            println!("{}Decl::Function", pad);
-            print_func_decl(func, indent + 2);
+            printer.line("Decl::Function");
+            let child = printer.child(true);
+            print_func_decl(func, &child);
         }
-        Decl::Type(t) => {
-            println!("{}Decl::Type", pad);
-            print_type_decl(t, indent + 2);
+        Decl::Type(ty) => {
+            printer.line("Decl::Type");
+            let child = printer.child(true);
+            print_type_decl(ty, &child);
         }
-        Decl::Protocol(p) => {
-            println!("{}Decl::Protocol", pad);
-            print_protocol_decl(p, indent + 2);
+        Decl::Protocol(protocol) => {
+            printer.line("Decl::Protocol");
+            let child = printer.child(true);
+            print_protocol_decl(protocol, &child);
         }
-        Decl::Macro(m) => {
-            println!("{}Decl::Macro", pad);
-            print_macro_decl(m, indent + 2);
+        Decl::Macro(mac) => {
+            printer.line("Decl::Macro");
+            let child = printer.child(true);
+            print_macro_decl(mac, &child);
         }
     }
 }
 
 fn print_program(program: &Program) {
-    println!("Program");
-    println!("  decls:");
-    for decl in &program.decls {
-        print_decl(decl, 4);
+    let printer = TreePrinter::root();
+    printer.line("Program");
+
+    let decls_printer = printer.child(false);
+    if program.decls.is_empty() {
+        decls_printer.line("decls: []");
+    } else {
+        decls_printer.line("decls");
+        for (idx, decl) in program.decls.iter().enumerate() {
+            let child = decls_printer.child(idx + 1 == program.decls.len());
+            print_decl(decl, &child);
+        }
     }
-    println!("  expr:");
-    print_expr(&program.expr, 4);
-    println!("  span: {}", program.span);
+
+    let expr_printer = printer.child(false);
+    expr_printer.line("expr");
+    let expr_child = expr_printer.child(true);
+    print_expr(&program.expr, &expr_child);
+
+    let span_printer = printer.child(true);
+    print_span(program.span, &span_printer);
 }
 
-fn print_expr(expr: &Expr, indent: usize) {
-    let pad = " ".repeat(indent);
+fn print_expr(expr: &Expr, printer: &TreePrinter) {
     match expr {
-        Expr::Number { value, span } => { println!("{}Number({})", pad, value); print_span(*span, indent + 2); }
-        Expr::StringLit { value, span } => { println!("{}String(\"{}\")", pad, value); print_span(*span, indent + 2); }
-        Expr::Bool { value, span } => { println!("{}Bool({})", pad, value); print_span(*span, indent + 2); }
-        Expr::Ident { name, span } => { println!("{}Ident({})", pad, name); print_span(*span, indent + 2); }
-        Expr::Call { callee, args, span } => {
-            println!("{}Call", pad);
-            print_span(*span, indent + 2);
-            print_expr(callee, indent + 2);
-            for arg in args { print_expr(arg, indent + 2); }
+        Expr::Number { value, span } => {
+            printer.line(&format!("Number({})", value));
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
-        Expr::MethodCall { object, method, args, span } => {
-            println!("{}MethodCall {}(...)", pad, method);
-            print_span(*span, indent + 2);
-            print_expr(object, indent + 2);
-            for arg in args { print_expr(arg, indent + 2); }
+        Expr::StringLit { value, span } => {
+            printer.line(&format!("String(\"{}\")", value));
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
+        Expr::Bool { value, span } => {
+            printer.line(&format!("Bool({})", value));
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
+        Expr::Ident { name, span } => {
+            printer.line(&format!("Ident({})", name));
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
+        Expr::Call { callee, args, span } => {
+            printer.line("Call");
+
+            let callee_printer = printer.child(false);
+            callee_printer.line("callee");
+            let callee_child = callee_printer.child(true);
+            print_expr(callee, &callee_child);
+
+            let args_printer = printer.child(false);
+            if args.is_empty() {
+                args_printer.line("args: []");
+            } else {
+                args_printer.line("args");
+                for (idx, arg) in args.iter().enumerate() {
+                    let child = args_printer.child(idx + 1 == args.len());
+                    print_expr(arg, &child);
+                }
+            }
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
+        Expr::MethodCall {
+            object,
+            method,
+            args,
+            span,
+        } => {
+            printer.line(&format!("MethodCall({})", method));
+
+            let object_printer = printer.child(false);
+            object_printer.line("object");
+            let object_child = object_printer.child(true);
+            print_expr(object, &object_child);
+
+            let args_printer = printer.child(false);
+            if args.is_empty() {
+                args_printer.line("args: []");
+            } else {
+                args_printer.line("args");
+                for (idx, arg) in args.iter().enumerate() {
+                    let child = args_printer.child(idx + 1 == args.len());
+                    print_expr(arg, &child);
+                }
+            }
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::FieldAccess { object, field, span } => {
-            println!("{}FieldAccess {}", pad, field);
-            print_span(*span, indent + 2);
-            print_expr(object, indent + 2);
+            printer.line(&format!("FieldAccess({})", field));
+
+            let object_printer = printer.child(false);
+            object_printer.line("object");
+            let object_child = object_printer.child(true);
+            print_expr(object, &object_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
-        Expr::New { type_name, args, span } => {
-            println!("{}New {}(...)", pad, type_name);
-            print_span(*span, indent + 2);
-            for arg in args { print_expr(arg, indent + 2); }
+        Expr::New {
+            type_name,
+            args,
+            span,
+        } => {
+            printer.line(&format!("New({})", type_name));
+
+            let args_printer = printer.child(false);
+            if args.is_empty() {
+                args_printer.line("args: []");
+            } else {
+                args_printer.line("args");
+                for (idx, arg) in args.iter().enumerate() {
+                    let child = args_printer.child(idx + 1 == args.len());
+                    print_expr(arg, &child);
+                }
+            }
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
-        Expr::SelfRef { span } => { println!("{}SelfRef", pad); print_span(*span, indent + 2); }
+        Expr::SelfRef { span } => {
+            printer.line("SelfRef");
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
         Expr::Base { args, span } => {
-            println!("{}Base", pad);
-            print_span(*span, indent + 2);
-            for arg in args { print_expr(arg, indent + 2); }
+            printer.line("Base");
+
+            let args_printer = printer.child(false);
+            if args.is_empty() {
+                args_printer.line("args: []");
+            } else {
+                args_printer.line("args");
+                for (idx, arg) in args.iter().enumerate() {
+                    let child = args_printer.child(idx + 1 == args.len());
+                    print_expr(arg, &child);
+                }
+            }
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
-        Expr::BinaryOp { op, left, right, span } => {
-            println!("{}BinaryOp({:?})", pad, op);
-            print_span(*span, indent + 2);
-            print_expr(left, indent + 2);
-            print_expr(right, indent + 2);
+        Expr::BinaryOp {
+            op,
+            left,
+            right,
+            span,
+        } => {
+            printer.line(&format!("BinaryOp({:?})", op));
+
+            let left_printer = printer.child(false);
+            left_printer.line("left");
+            let left_child = left_printer.child(true);
+            print_expr(left, &left_child);
+
+            let right_printer = printer.child(false);
+            right_printer.line("right");
+            let right_child = right_printer.child(true);
+            print_expr(right, &right_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::UnaryOp { op, operand, span } => {
-            println!("{}UnaryOp({:?})", pad, op);
-            print_span(*span, indent + 2);
-            print_expr(operand, indent + 2);
+            printer.line(&format!("UnaryOp({:?})", op));
+
+            let operand_printer = printer.child(false);
+            operand_printer.line("operand");
+            let operand_child = operand_printer.child(true);
+            print_expr(operand, &operand_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::IsType { expr: e, ty, span } => {
-            println!("{}IsType", pad);
-            print_span(*span, indent + 2);
-            println!("{}  ty:", pad);
-            print_type_expr(ty, indent + 4);
-            println!("{}  expr:", pad);
-            print_expr(e, indent + 4);
+            printer.line("IsType");
+
+            let expr_printer = printer.child(false);
+            expr_printer.line("expr");
+            let expr_child = expr_printer.child(true);
+            print_expr(e, &expr_child);
+
+            let ty_printer = printer.child(false);
+            ty_printer.line("ty");
+            let ty_child = ty_printer.child(true);
+            print_type_expr(ty, &ty_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::AsType { expr: e, ty, span } => {
-            println!("{}AsType", pad);
-            print_span(*span, indent + 2);
-            println!("{}  ty:", pad);
-            print_type_expr(ty, indent + 4);
-            println!("{}  expr:", pad);
-            print_expr(e, indent + 4);
+            printer.line("AsType");
+
+            let expr_printer = printer.child(false);
+            expr_printer.line("expr");
+            let expr_child = expr_printer.child(true);
+            print_expr(e, &expr_child);
+
+            let ty_printer = printer.child(false);
+            ty_printer.line("ty");
+            let ty_child = ty_printer.child(true);
+            print_type_expr(ty, &ty_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
-        Expr::If { condition, then_expr, elif_branches, else_expr, span } => {
-            println!("{}If", pad);
-            print_span(*span, indent + 2);
-            println!("{}  condition:", pad);
-            print_expr(condition, indent + 4);
-            println!("{}  then:", pad);
-            print_expr(then_expr, indent + 4);
-            if !elif_branches.is_empty() {
-                println!("{}  elif_branches:", pad);
-                for eb in elif_branches { print_expr(&eb.condition, indent + 4); print_expr(&eb.body, indent + 4); print_span(eb.span, indent + 4); }
+        Expr::If {
+            condition,
+            then_expr,
+            elif_branches,
+            else_expr,
+            span,
+        } => {
+            printer.line("If");
+
+            let condition_printer = printer.child(false);
+            condition_printer.line("condition");
+            let condition_child = condition_printer.child(true);
+            print_expr(condition, &condition_child);
+
+            let then_printer = printer.child(false);
+            then_printer.line("then");
+            let then_child = then_printer.child(true);
+            print_expr(then_expr, &then_child);
+
+            let elif_printer = printer.child(false);
+            if elif_branches.is_empty() {
+                elif_printer.line("elif_branches: []");
+            } else {
+                elif_printer.line("elif_branches");
+                for (idx, eb) in elif_branches.iter().enumerate() {
+                    let eb_printer = elif_printer.child(idx + 1 == elif_branches.len());
+                    eb_printer.line("ElifBranch");
+
+                    let eb_condition = eb_printer.child(false);
+                    eb_condition.line("condition");
+                    let eb_condition_child = eb_condition.child(true);
+                    print_expr(&eb.condition, &eb_condition_child);
+
+                    let eb_body = eb_printer.child(false);
+                    eb_body.line("body");
+                    let eb_body_child = eb_body.child(true);
+                    print_expr(&eb.body, &eb_body_child);
+
+                    let eb_span = eb_printer.child(true);
+                    print_span(eb.span, &eb_span);
+                }
             }
-            println!("{}  else:", pad);
-            print_expr(else_expr, indent + 4);
+
+            let else_printer = printer.child(false);
+            else_printer.line("else");
+            let else_child = else_printer.child(true);
+            print_expr(else_expr, &else_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::While { condition, body, span } => {
-            println!("{}While", pad);
-            print_span(*span, indent + 2);
-            println!("{}  condition:", pad);
-            print_expr(condition, indent + 4);
-            println!("{}  body:", pad);
-            print_expr(body, indent + 4);
+            printer.line("While");
+
+            let condition_printer = printer.child(false);
+            condition_printer.line("condition");
+            let condition_child = condition_printer.child(true);
+            print_expr(condition, &condition_child);
+
+            let body_printer = printer.child(false);
+            body_printer.line("body");
+            let body_child = body_printer.child(true);
+            print_expr(body, &body_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
-        Expr::For { var, iterable, body, span } => {
-            println!("{}For var={}", pad, var);
-            print_span(*span, indent + 2);
-            println!("{}  iterable:", pad);
-            print_expr(iterable, indent + 4);
-            println!("{}  body:", pad);
-            print_expr(body, indent + 4);
+        Expr::For {
+            var,
+            iterable,
+            body,
+            span,
+        } => {
+            printer.line(&format!("For(var={})", var));
+
+            let iterable_printer = printer.child(false);
+            iterable_printer.line("iterable");
+            let iterable_child = iterable_printer.child(true);
+            print_expr(iterable, &iterable_child);
+
+            let body_printer = printer.child(false);
+            body_printer.line("body");
+            let body_child = body_printer.child(true);
+            print_expr(body, &body_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::Let { bindings, body, span } => {
-            println!("{}Let", pad);
-            print_span(*span, indent + 2);
-            println!("{}  bindings:", pad);
-            for b in bindings {
-                println!("{}    LetBinding name: {}", pad, b.name);
-                match &b.ty { Some(t) => { println!("{}      ty:", pad); print_type_expr(t, indent + 8); } None => println!("{}      ty: None", pad) }
-                println!("{}      init:", pad);
-                print_expr(&b.init, indent + 8);
-                print_span(b.span, indent + 6);
+            printer.line("Let");
+
+            let bindings_printer = printer.child(false);
+            if bindings.is_empty() {
+                bindings_printer.line("bindings: []");
+            } else {
+                bindings_printer.line("bindings");
+                for (idx, binding) in bindings.iter().enumerate() {
+                    let binding_printer = bindings_printer.child(idx + 1 == bindings.len());
+                    binding_printer.line("LetBinding");
+
+                    let name_printer = binding_printer.child(false);
+                    name_printer.line(&format!("name: {}", binding.name));
+
+                    let ty_printer = binding_printer.child(false);
+                    match &binding.ty {
+                        Some(ty) => {
+                            ty_printer.line("ty");
+                            let ty_child = ty_printer.child(true);
+                            print_type_expr(ty, &ty_child);
+                        }
+                        None => ty_printer.line("ty: None"),
+                    }
+
+                    let init_printer = binding_printer.child(false);
+                    init_printer.line("init");
+                    let init_child = init_printer.child(true);
+                    print_expr(&binding.init, &init_child);
+
+                    let span_printer = binding_printer.child(true);
+                    print_span(binding.span, &span_printer);
+                }
             }
-            println!("{}  body:", pad);
-            print_expr(body, indent + 4);
+
+            let body_printer = printer.child(false);
+            body_printer.line("body");
+            let body_child = body_printer.child(true);
+            print_expr(body, &body_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::Assign { target, value, span } => {
-            println!("{}Assign", pad);
-            print_span(*span, indent + 2);
-            println!("{}  target:", pad);
-            print_expr(target, indent + 4);
-            println!("{}  value:", pad);
-            print_expr(value, indent + 4);
+            printer.line("Assign");
+
+            let target_printer = printer.child(false);
+            target_printer.line("target");
+            let target_child = target_printer.child(true);
+            print_expr(target, &target_child);
+
+            let value_printer = printer.child(false);
+            value_printer.line("value");
+            let value_child = value_printer.child(true);
+            print_expr(value, &value_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::Block { exprs, span } => {
-            println!("{}Block", pad);
-            print_span(*span, indent + 2);
-            for e in exprs { print_expr(e, indent + 2); }
+            printer.line("Block");
+
+            let exprs_printer = printer.child(false);
+            if exprs.is_empty() {
+                exprs_printer.line("exprs: []");
+            } else {
+                exprs_printer.line("exprs");
+                for (idx, e) in exprs.iter().enumerate() {
+                    let child = exprs_printer.child(idx + 1 == exprs.len());
+                    print_expr(e, &child);
+                }
+            }
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::VectorLit { elements, span } => {
-            println!("{}VectorLit", pad);
-            print_span(*span, indent + 2);
-            for e in elements { print_expr(e, indent + 2); }
+            printer.line("VectorLit");
+
+            let elements_printer = printer.child(false);
+            if elements.is_empty() {
+                elements_printer.line("elements: []");
+            } else {
+                elements_printer.line("elements");
+                for (idx, element) in elements.iter().enumerate() {
+                    let child = elements_printer.child(idx + 1 == elements.len());
+                    print_expr(element, &child);
+                }
+            }
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
-        Expr::VectorGen { element, var, iterable, span } => {
-            println!("{}VectorGen var={}", pad, var);
-            print_span(*span, indent + 2);
-            println!("{}  element:", pad);
-            print_expr(element, indent + 4);
-            println!("{}  iterable:", pad);
-            print_expr(iterable, indent + 4);
+        Expr::VectorGen {
+            element,
+            var,
+            iterable,
+            span,
+        } => {
+            printer.line(&format!("VectorGen(var={})", var));
+
+            let element_printer = printer.child(false);
+            element_printer.line("element");
+            let element_child = element_printer.child(true);
+            print_expr(element, &element_child);
+
+            let iterable_printer = printer.child(false);
+            iterable_printer.line("iterable");
+            let iterable_child = iterable_printer.child(true);
+            print_expr(iterable, &iterable_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
         Expr::Index { object, index, span } => {
-            println!("{}Index", pad);
-            print_span(*span, indent + 2);
-            println!("{}  object:", pad);
-            print_expr(object, indent + 4);
-            println!("{}  index:", pad);
-            print_expr(index, indent + 4);
+            printer.line("Index");
+
+            let object_printer = printer.child(false);
+            object_printer.line("object");
+            let object_child = object_printer.child(true);
+            print_expr(object, &object_child);
+
+            let index_printer = printer.child(false);
+            index_printer.line("index");
+            let index_child = index_printer.child(true);
+            print_expr(index, &index_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
-        Expr::Lambda { params, return_type, body, span } => {
-            println!("{}Lambda", pad);
-            print_span(*span, indent + 2);
-            println!("{}  params:", pad);
-            for p in params { print_param(p, indent + 4); }
-            match return_type { Some(ty) => { println!("{}  return_type:", pad); print_type_expr(ty, indent + 4); } None => println!("{}  return_type: None", pad) }
-            println!("{}  body:", pad);
-            print_func_body(body, indent + 4);
+        Expr::Lambda {
+            params,
+            return_type,
+            body,
+            span,
+        } => {
+            printer.line("Lambda");
+
+            let params_printer = printer.child(false);
+            if params.is_empty() {
+                params_printer.line("params: []");
+            } else {
+                params_printer.line("params");
+                for (idx, param) in params.iter().enumerate() {
+                    let child = params_printer.child(idx + 1 == params.len());
+                    print_param(param, &child);
+                }
+            }
+
+            let return_printer = printer.child(false);
+            match return_type {
+                Some(ty) => {
+                    return_printer.line("return_type");
+                    let child = return_printer.child(true);
+                    print_type_expr(ty, &child);
+                }
+                None => return_printer.line("return_type: None"),
+            }
+
+            let body_printer = printer.child(false);
+            body_printer.line("body");
+            let body_child = body_printer.child(true);
+            print_func_body(body, &body_child);
+
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
         }
     }
 }
@@ -426,7 +934,10 @@ pub fn test_expression(src: &str) {
     match parser.parse_expr() {
         Some(expr) => {
             println!("\nAST:");
-            print_expr(&expr, 0);
+            let printer = TreePrinter::root();
+            printer.line("Expr");
+            let child = printer.child(true);
+            print_expr(&expr, &child);
         }
         None => {
             println!("\nParser Error:");
