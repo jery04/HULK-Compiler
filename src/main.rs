@@ -13,10 +13,10 @@ fn main() {
         type A {
             value: Number = 10;
             getValue() => self.value;
-            inc() => {
+            inc() {
                 self.value := self.value + 1;
                 self.value
-            };
+            }
         }
 
         type Person(name: String, age: Number) inherits A {
@@ -25,28 +25,28 @@ fn main() {
 
             getName() => self.name;
 
-            birthday() => {
+            birthday() {
                 self.age := self.age + 1;
                 self.age
-            };
+            }
 
             isAdult() => self.age >= 18;
         }
 
-        function greet(p: Person) => {
+        function greet(p: Person) {
             print("Hola " @@ p.getName());
             p.getValue()
-        };
+        }
 
-        function makePeople(n: Number) => {
+        function makePeople(n: Number) {
             let result: Person[] = [] in
             for (i in range(0, n)) {
-                let p = new Person("User" @@ i, i + 10) in {
+                let p = new Person("User" @@ i, i + 10) in (
                     result := result @@ [p];
-                };
+                );
             };
             result
-        };
+        }
 
         protocol Printable {
             printSelf(x): String;
@@ -90,7 +90,7 @@ fn main() {
             let f = (x: Number, y: Number) -> Number => x + y in
             print("Functor sum: " @@ f(10, 20));
 
-        }
+        };
     "#);
 
     // test_program(r#"

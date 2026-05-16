@@ -713,13 +713,36 @@ impl<'src> Parser<'src> {
                     }
                 }
 
-                // Fallback: regular grouped expression
-                self.advance();
-                let inner = self.parse_expr()?;
+                // Fallback: regular grouped expression OR parenthesized block
+                // Allow parentheses to contain one or more expressions separated by ';',
+                // so forms like `( a := a + 1; a )` or `(expr)` are accepted.
+                self.advance(); // consume '('
+
+                // Collect one or more expressions inside parentheses.
+                let mut exprs: Vec<Expr> = Vec::new();
+                while !self.check(&Token::RParen) && !self.is_at_end() {
+                    let e = self.parse_expr()?;
+                    exprs.push(e);
+
+                    // If there's a semicolon, consume it and continue parsing more expressions.
+                    if self.matches(&Token::Semicolon) {
+                        // continue to next expression
+                        continue;
+                    } else {
+                        // no semicolon means likely single expression or end
+                        break;
+                    }
+                }
+
                 let rparen = self.expect(&Token::RParen, "expected ')' after expression")?;
                 let span = Span { start: lparen_span.start, end: rparen.span.end };
-                let inner = Self::set_expr_span(inner, span);
-                Some(inner)
+
+                if exprs.len() == 1 {
+                    let inner = Self::set_expr_span(exprs.into_iter().next().unwrap(), span);
+                    Some(inner)
+                } else {
+                    Some(Expr::Block { exprs, span })
+                }
             }
 
             Token::LBrace => {
@@ -1235,12 +1258,32 @@ impl<'src> Parser<'src> {
         // Parse function body
         let body = if self.matches(&Token::Arrow) {
             // Inline: => expr;
-            let inline_expr = self.parse_expr()?;
-            self.expect(&Token::Semicolon, "expected ';' after inline function body")?;
-            FuncBody::Inline(Box::new(inline_expr))
+            // Disallow "=> { ... }" — record error but continue by parsing the block as the body
+            if self.check(&Token::LBrace) {
+                let brace_span = self.current.span;
+                self.errors.push(format!("[ParseError {}] inline function body cannot be a block; use '{{...}}' without '=>' or an expression after '=>'", brace_span));
+                // Parse the block anyway so we can continue parsing subsequent items
+                let block_expr = self.parse_block()?;
+                if self.check(&Token::Semicolon) {
+                    let semi_span = self.current.span;
+                    self.errors.push(format!("[ParseError {}] unexpected ';' after function block body", semi_span));
+                    self.advance();
+                }
+                FuncBody::Block(Box::new(block_expr))
+            } else {
+                let inline_expr = self.parse_expr()?;
+                self.expect(&Token::Semicolon, "expected ';' after inline function body")?;
+                FuncBody::Inline(Box::new(inline_expr))
+            }
         } else if self.check(&Token::LBrace) {
-            // Block body
+            // Block body: must not be followed by a trailing semicolon
             let block_expr = self.parse_block()?;
+            if self.check(&Token::Semicolon) {
+                // Report error but consume semicolon to continue parsing
+                let semi_span = self.current.span;
+                self.errors.push(format!("[ParseError {}] unexpected ';' after function block body", semi_span));
+                self.advance();
+            }
             FuncBody::Block(Box::new(block_expr))
         } else {
             self.error("expected '=>' or '{' for function body");
@@ -1346,11 +1389,31 @@ impl<'src> Parser<'src> {
                     };
 
                     let body = if self.matches(&Token::Arrow) {
-                        let inline = self.parse_expr()?;
-                        self.expect(&Token::Semicolon, "expected ';' after method inline body")?;
-                        FuncBody::Inline(Box::new(inline))
+                        // Disallow "=> { ... }" for inline method bodies — record error but continue
+                        if self.check(&Token::LBrace) {
+                            let brace_span = self.current.span;
+                            self.errors.push(format!("[ParseError {}] inline method body cannot be a block; use '{{...}}' without '=>' or an expression after '=>'", brace_span));
+                            // Parse the block to continue parsing members
+                            let block = self.parse_block()?;
+                            if self.check(&Token::Semicolon) {
+                                let semi_span = self.current.span;
+                                self.errors.push(format!("[ParseError {}] unexpected ';' after method block body", semi_span));
+                                self.advance();
+                            }
+                            FuncBody::Block(Box::new(block))
+                        } else {
+                            let inline = self.parse_expr()?;
+                            self.expect(&Token::Semicolon, "expected ';' after method inline body")?;
+                            FuncBody::Inline(Box::new(inline))
+                        }
                     } else if self.check(&Token::LBrace) {
+                        // Block body: must not be followed by a trailing semicolon
                         let block = self.parse_block()?;
+                        if self.check(&Token::Semicolon) {
+                            let semi_span = self.current.span;
+                            self.errors.push(format!("[ParseError {}] unexpected ';' after method block body", semi_span));
+                            self.advance();
+                        }
                         FuncBody::Block(Box::new(block))
                     } else {
                         self.error("expected '=>' or '{' for method body");
