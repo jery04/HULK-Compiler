@@ -96,6 +96,22 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Expect and consume a specific token, with optional synchronization on error.
+    fn expect_with_sync(&mut self, expected: &Token, msg: &str, sync: bool) -> Option<SpannedToken> {
+        if self.check(expected) {
+            let tok = self.current.clone();
+            self.advance();
+            Some(tok)
+        } else {
+            if sync {
+                self.error(msg);
+            } else {
+                self.error_no_sync(msg);
+            }
+            None
+        }
+    }
+
     // `expect_kind` removed in Phase 1; use `expect` or reintroduce when needed.
 
     /// Record a parsing error with the current token's span.
@@ -104,6 +120,13 @@ impl<'src> Parser<'src> {
         let full = format!("[ParseError {}] {}", span, msg);
         self.errors.push(full);
         self.synchronize();
+    }
+
+    /// Record a parsing error with the current token's span, without synchronizing.
+    fn error_no_sync(&mut self, msg: &str) {
+        let span = self.current.span;
+        let full = format!("[ParseError {}] {}", span, msg);
+        self.errors.push(full);
     }
 
     /// Synchronize to a safe point for error recovery (panic-mode).
@@ -127,6 +150,17 @@ impl<'src> Parser<'src> {
                 _ => self.advance(),
             }
         }
+    }
+
+    /// Advance until a recovery token or EOF is found. Leaves the recovery token unconsumed.
+    fn recover_to(&mut self, recovery: &[Token]) -> bool {
+        while !self.is_at_end() {
+            if recovery.iter().any(|t| self.check(t)) {
+                return true;
+            }
+            self.advance();
+        }
+        false
     }
 
     /// Create a placeholder expression after a parse error.
@@ -509,7 +543,7 @@ impl<'src> Parser<'src> {
                 // Phase 3: Type operations (is, as)
                 Token::Is => {
                     self.advance();
-                    let (ty, end_span) = self.parse_type_expr()?;
+                    let (ty, end_span) = self.parse_type_expr_or_error();
                     let span = Span {
                         start: expr.span().start,
                         end: end_span.end,
@@ -519,7 +553,7 @@ impl<'src> Parser<'src> {
 
                 Token::As => {
                     self.advance();
-                    let (ty, end_span) = self.parse_type_expr()?;
+                    let (ty, end_span) = self.parse_type_expr_or_error();
                     let span = Span {
                         start: expr.span().start,
                         end: end_span.end,
@@ -677,7 +711,7 @@ impl<'src> Parser<'src> {
 
                                 // Optional return type after '->'
                                 let return_type = if self.matches(&Token::ThinArrow) {
-                                    let (t, _) = self.parse_type_expr()?;
+                                    let (t, _) = self.parse_type_expr_or_error();
                                     Some(t)
                                 } else {
                                     None
@@ -782,25 +816,38 @@ impl<'src> Parser<'src> {
         let mut exprs = Vec::new();
 
         while !self.check(&Token::RBrace) && !self.is_at_end() {
-            let expr = self.parse_expr()?;
+            let expr = match self.parse_expr() {
+                Some(e) => e,
+                None => self.error_expr(),
+            };
             exprs.push(expr);
-            
-            // Consume optional semicolon
-            if !self.matches(&Token::Semicolon) {
-                // If no semicolon, we expect the next token to be RBrace
-                if !self.check(&Token::RBrace) {
-                    self.error("expected ';' or '}' after block expression");
-                    return None;
-                }
+
+            if self.matches(&Token::Semicolon) {
+                continue;
+            }
+            if self.check(&Token::RBrace) {
+                break;
+            }
+
+            self.error_no_sync("expected ';' or '}' after block expression");
+            if !self.recover_to(&[Token::Semicolon, Token::RBrace]) {
+                break;
+            }
+            if self.matches(&Token::Semicolon) {
+                continue;
             }
         }
 
-        let rbrace = self.expect(&Token::RBrace, "expected '}' to close block")?;
-
-        let span = Span {
-            start: start_span.start,
-            end: rbrace.span.end,
+        let end_span = if self.check(&Token::RBrace) {
+            let rbrace = self.current.clone();
+            self.advance();
+            rbrace.span.end
+        } else {
+            self.error("expected '}' to close block");
+            self.current.span.end
         };
+
+        let span = Span { start: start_span.start, end: end_span };
 
         Some(Expr::Block { exprs, span })
     }
@@ -829,17 +876,40 @@ impl<'src> Parser<'src> {
         }
 
         // Parse first element
-        let first_expr = self.parse_expr()?;
+        let first_expr = match self.parse_expr() {
+            Some(e) => e,
+            None => self.error_expr(),
+        };
+        let first_is_error = matches!(first_expr, Expr::Error { .. });
 
         // The generator syntax uses `|`, which is also the boolean OR token.
         // If parsing consumed it as `left | ident` and the next token is `in`,
         // recover that shape as a vector generator.
-        if self.check(&Token::In) {
+        if !first_is_error && self.check(&Token::In) {
             if let Expr::BinaryOp { op: BinOp::Or, left, right, .. } = &first_expr {
                 if let Expr::Ident { name: var, .. } = right.as_ref() {
-                    self.expect(&Token::In, "expected 'in' after generator variable")?;
-                    let iterable = self.parse_expr()?;
-                    let rbracket = self.expect(&Token::RBracket, "expected ']' to close vector")?;
+                    if self.expect(&Token::In, "expected 'in' after generator variable").is_none() {
+                        self.recover_to(&[Token::RBracket]);
+                        let end = if self.check(&Token::RBracket) {
+                            let rbracket = self.current.clone();
+                            self.advance();
+                            rbracket.span.end
+                        } else {
+                            self.current.span.end
+                        };
+                        return Some(Expr::Error { span: Span { start: start_span.start, end } });
+                    }
+                    let iterable = match self.parse_expr() {
+                        Some(e) => e,
+                        None => self.error_expr(),
+                    };
+                    let rbracket = match self.expect(&Token::RBracket, "expected ']' to close vector") {
+                        Some(tok) => tok,
+                        None => {
+                            let end = self.current.span.end;
+                            return Some(Expr::Error { span: Span { start: start_span.start, end } });
+                        }
+                    };
 
                     let span = Span {
                         start: start_span.start,
@@ -857,7 +927,7 @@ impl<'src> Parser<'src> {
         }
 
         // Check for generator pattern: "|"
-        if self.matches(&Token::Pipe) {
+        if !first_is_error && self.matches(&Token::Pipe) {
             let var = match self.peek() {
                 Token::Ident(name) => {
                     let n = name.clone();
@@ -865,14 +935,42 @@ impl<'src> Parser<'src> {
                     n
                 }
                 _ => {
-                    self.error("expected variable name after '|'");
-                    return Some(Expr::Error { span: start_span });
+                    self.error_no_sync("expected variable name after '|'" );
+                    self.recover_to(&[Token::RBracket]);
+                    let end = if self.check(&Token::RBracket) {
+                        let rbracket = self.current.clone();
+                        self.advance();
+                        rbracket.span.end
+                    } else {
+                        self.current.span.end
+                    };
+                    return Some(Expr::Error { span: Span { start: start_span.start, end } });
                 }
             };
 
-            self.expect(&Token::In, "expected 'in' after generator variable")?;
-            let iterable = self.parse_expr()?;
-            let rbracket = self.expect(&Token::RBracket, "expected ']' to close vector")?;
+            if !self.matches(&Token::In) {
+                self.error_no_sync("expected 'in' after generator variable");
+                self.recover_to(&[Token::RBracket]);
+                let end = if self.check(&Token::RBracket) {
+                    let rbracket = self.current.clone();
+                    self.advance();
+                    rbracket.span.end
+                } else {
+                    self.current.span.end
+                };
+                return Some(Expr::Error { span: Span { start: start_span.start, end } });
+            }
+            let iterable = match self.parse_expr() {
+                Some(e) => e,
+                None => self.error_expr(),
+            };
+            let rbracket = match self.expect(&Token::RBracket, "expected ']' to close vector") {
+                Some(tok) => tok,
+                None => {
+                    let end = self.current.span.end;
+                    return Some(Expr::Error { span: Span { start: start_span.start, end } });
+                }
+            };
 
             let span = Span {
                 start: start_span.start,
@@ -890,19 +988,42 @@ impl<'src> Parser<'src> {
         // Otherwise, parse as literal vector
         let mut elements = vec![first_expr];
 
-        while self.matches(&Token::Comma) {
+        loop {
+            if self.matches(&Token::Comma) {
+                if self.check(&Token::RBracket) {
+                    break;
+                }
+                let elem = match self.parse_expr() {
+                    Some(e) => e,
+                    None => self.error_expr(),
+                };
+                if matches!(elem, Expr::Error { .. }) {
+                    self.recover_to(&[Token::Comma, Token::RBracket]);
+                }
+                elements.push(elem);
+                continue;
+            }
+
             if self.check(&Token::RBracket) {
                 break;
             }
-            elements.push(self.parse_expr()?);
+
+            self.error_no_sync("expected ',' or ']' after vector element");
+            if !self.recover_to(&[Token::Comma, Token::RBracket]) {
+                break;
+            }
         }
 
-        let rbracket = self.expect(&Token::RBracket, "expected ']' to close vector")?;
-
-        let span = Span {
-            start: start_span.start,
-            end: rbracket.span.end,
+        let end_span = if self.check(&Token::RBracket) {
+            let rbracket = self.current.clone();
+            self.advance();
+            rbracket.span.end
+        } else {
+            self.error("expected ']' to close vector");
+            self.current.span.end
         };
+
+        let span = Span { start: start_span.start, end: end_span };
 
         Some(Expr::VectorLit { elements, span })
     }
@@ -936,20 +1057,30 @@ impl<'src> Parser<'src> {
     // Parse a simple TypeExpr for Phase 2/3 (Named, Iterable, Vector, Functor)
     // Returns (TypeExpr, Span) where Span is the span of the last consumed token.
     fn parse_type_expr(&mut self) -> Option<(TypeExpr, Span)> {
+        self.parse_type_expr_internal(true)
+    }
+
+    // Parse a TypeExpr without synchronizing on error.
+    fn parse_type_expr_soft(&mut self) -> Option<(TypeExpr, Span)> {
+        self.parse_type_expr_internal(false)
+    }
+
+    // Parse a TypeExpr, optionally synchronizing on error.
+    fn parse_type_expr_internal(&mut self, sync: bool) -> Option<(TypeExpr, Span)> {
         // Functor type: (A, B) -> C
         if self.check(&Token::LParen) {
-            self.expect(&Token::LParen, "expected '(' starting functor type")?;
+            self.expect_with_sync(&Token::LParen, "expected '(' starting functor type", sync)?;
             let mut params = Vec::new();
             // At least one type required inside functor params
-            let (t, _) = self.parse_type_expr()?;
+            let (t, _) = self.parse_type_expr_internal(sync)?;
             params.push(t);
             while self.matches(&Token::Comma) {
-                let (t, _) = self.parse_type_expr()?;
+                let (t, _) = self.parse_type_expr_internal(sync)?;
                 params.push(t);
             }
-            self.expect(&Token::RParen, "expected ')' after functor param list")?;
-            self.expect(&Token::ThinArrow, "expected '->' after functor param list")?;
-            let (returns, end_span) = self.parse_type_expr()?;
+            self.expect_with_sync(&Token::RParen, "expected ')' after functor param list", sync)?;
+            self.expect_with_sync(&Token::ThinArrow, "expected '->' after functor param list", sync)?;
+            let (returns, end_span) = self.parse_type_expr_internal(sync)?;
             return Some((TypeExpr::Functor { params, returns: Box::new(returns) }, end_span));
         }
 
@@ -970,8 +1101,8 @@ impl<'src> Parser<'src> {
                 // Vector: IDENT '[]'
                 if self.check(&Token::LBracket) {
                     // consume '[' then expect ']'
-                    self.expect(&Token::LBracket, "expected '[' in type vector")?;
-                    let rbracket = self.expect(&Token::RBracket, "expected ']' in type vector")?;
+                    self.expect_with_sync(&Token::LBracket, "expected '[' in type vector", sync)?;
+                    let rbracket = self.expect_with_sync(&Token::RBracket, "expected ']' in type vector", sync)?;
                     return Some((TypeExpr::Vector(Box::new(TypeExpr::Named(name))), rbracket.span));
                 }
 
@@ -979,9 +1110,21 @@ impl<'src> Parser<'src> {
                 Some((TypeExpr::Named(name), name_span))
             }
             _ => {
-                self.error("expected type expression");
+                if sync {
+                    self.error("expected type expression");
+                } else {
+                    self.error_no_sync("expected type expression");
+                }
                 None
             }
+        }
+    }
+
+    // Parse a type expression, or return a placeholder to keep parsing.
+    fn parse_type_expr_or_error(&mut self) -> (TypeExpr, Span) {
+        match self.parse_type_expr() {
+            Some((ty, span)) => (ty, span),
+            None => (TypeExpr::Named("__parse_error__".to_string()), self.current.span),
         }
     }
 
