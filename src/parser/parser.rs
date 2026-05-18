@@ -86,30 +86,50 @@ impl<'src> Parser<'src> {
 
     /// Expect and consume a specific token, or record an error.
     pub fn expect(&mut self, expected: &Token, msg: &str) -> Option<SpannedToken> {
-        if self.check(expected) {
-            let tok = self.current.clone();
-            self.advance();
-            Some(tok)
-        } else {
-            self.error(msg);
-            None
-        }
+        self.expect_internal(expected, msg, true)
     }
 
     /// Expect and consume a specific token, with optional synchronization on error.
     fn expect_with_sync(&mut self, expected: &Token, msg: &str, sync: bool) -> Option<SpannedToken> {
+        self.expect_internal(expected, msg, sync)
+    }
+
+    /// Internal expect implementation with customizable recovery scope.
+    fn expect_internal(&mut self, expected: &Token, msg: &str, sync: bool) -> Option<SpannedToken> {
         if self.check(expected) {
             let tok = self.current.clone();
             self.advance();
-            Some(tok)
-        } else {
-            if sync {
-                self.error(msg);
-            } else {
-                self.error_no_sync(msg);
-            }
-            None
+            return Some(tok);
         }
+
+        // Record error but try to recover locally without consuming closing delimiters.
+        self.error_no_sync(msg);
+
+        let mut recovery = vec![
+            expected.clone(),
+            Token::Semicolon,
+            Token::RBrace,
+            Token::RParen,
+            Token::RBracket,
+        ];
+        if sync {
+            recovery.push(Token::Function);
+            recovery.push(Token::Type);
+            recovery.push(Token::Protocol);
+        }
+
+        let _ = self.recover_to(&recovery);
+        if self.check(expected) {
+            let tok = self.current.clone();
+            self.advance();
+            return Some(tok);
+        }
+
+        Some(SpannedToken {
+            token: expected.clone(),
+            span: self.current.span,
+            slice: String::new(),
+        })
     }
 
     // `expect_kind` removed in Phase 1; use `expect` or reintroduce when needed.
@@ -1110,12 +1130,24 @@ impl<'src> Parser<'src> {
                 Some((TypeExpr::Named(name), name_span))
             }
             _ => {
+                self.error_no_sync("expected type expression");
+                let mut recovery = vec![
+                    Token::Comma,
+                    Token::RParen,
+                    Token::ThinArrow,
+                    Token::RBracket,
+                    Token::Colon,
+                    Token::Eq,
+                    Token::Semicolon,
+                    Token::RBrace,
+                ];
                 if sync {
-                    self.error("expected type expression");
-                } else {
-                    self.error_no_sync("expected type expression");
+                    recovery.push(Token::Function);
+                    recovery.push(Token::Type);
+                    recovery.push(Token::Protocol);
                 }
-                None
+                let _ = self.recover_to(&recovery);
+                Some((TypeExpr::Named("__parse_error__".to_string()), self.current.span))
             }
         }
     }
@@ -1130,37 +1162,53 @@ impl<'src> Parser<'src> {
 
     // Parse a single let binding: IDENT TypeAnnotation? '=' Expr
     fn parse_let_binding(&mut self) -> Option<LetBinding> {
-        match self.peek().clone() {
+        let (name, name_span, can_continue) = match self.peek().clone() {
             Token::Ident(n) => {
                 let n = n.clone();
                 let name_span = self.current.span;
                 self.advance();
-                // Optional type annotation
-                let ty = if self.matches(&Token::Colon) {
-                    let (t, _) = self.parse_type_expr()?;
-                    Some(t)
-                } else {
-                    None
-                };
-
-                // Expect '='
-                self.expect(&Token::Eq, "expected '=' in let binding")?;
-
-                let init = self.parse_expr()?;
-
-                let span = Span { start: name_span.start, end: init.span().end };
-
-                Some(LetBinding { name: n, ty, init: Box::new(init), span })
+                (n, name_span, true)
             }
             Token::InternalIdent(_) => {
-                self.error("internal identifiers not allowed in user code");
-                None
+                let name_span = self.current.span;
+                self.error_no_sync("internal identifiers not allowed in user code");
+                self.advance();
+                ("__parse_error__".to_string(), name_span, true)
             }
             _ => {
-                self.error("expected identifier in let binding");
-                None
+                let name_span = self.current.span;
+                self.error_no_sync("expected identifier in let binding");
+                let _ = self.recover_to(&[Token::Comma, Token::In, Token::Eq, Token::Semicolon]);
+                let init = self.error_expr();
+                let span = Span { start: name_span.start, end: init.span().end };
+                return Some(LetBinding {
+                    name: "__parse_error__".to_string(),
+                    ty: None,
+                    init: Box::new(init),
+                    span,
+                });
             }
+        };
+
+        let ty = if self.matches(&Token::Colon) {
+            let (t, _) = self.parse_type_expr_or_error();
+            Some(t)
+        } else {
+            None
+        };
+
+        if can_continue {
+            self.expect(&Token::Eq, "expected '=' in let binding")?;
         }
+
+        let init = match self.parse_expr() {
+            Some(e) => e,
+            None => self.error_expr(),
+        };
+
+        let span = Span { start: name_span.start, end: init.span().end };
+
+        Some(LetBinding { name, ty, init: Box::new(init), span })
     }
 
     // Parse `let` expression: "let" LetBinding ("," LetBinding)* "in" Expr
@@ -1245,8 +1293,9 @@ impl<'src> Parser<'src> {
                 n
             }
             _ => {
-                self.error("expected identifier in for loop header");
-                return None;
+                self.error_no_sync("expected identifier in for loop header");
+                let _ = self.recover_to(&[Token::In, Token::RParen]);
+                "__parse_error__".to_string()
             }
         };
 
@@ -1344,18 +1393,28 @@ impl<'src> Parser<'src> {
 
     // Parse a parameter for functions/methods/type params
     fn parse_param(&mut self) -> Option<Param> {
-        let name = match self.peek().clone() {
-            Token::Ident(n) => n,
+        let (name, param_span) = match self.peek().clone() {
+            Token::Ident(n) => {
+                let span = self.current.span;
+                self.advance();
+                (n, span)
+            }
+            Token::InternalIdent(_) => {
+                let span = self.current.span;
+                self.error_no_sync("internal identifiers not allowed in user code");
+                self.advance();
+                ("__parse_error__".to_string(), span)
+            }
             _ => {
-                self.error("expected parameter name");
-                return None;
+                let span = self.current.span;
+                self.error_no_sync("expected parameter name");
+                let _ = self.recover_to(&[Token::Comma, Token::RParen]);
+                return Some(Param { name: "__parse_error__".to_string(), ty: None, span });
             }
         };
-        let param_span = self.current.span;
-        self.advance();
 
         let ty = if self.matches(&Token::Colon) {
-            let (t, _) = self.parse_type_expr()?;
+            let (t, _) = self.parse_type_expr_or_error();
             Some(t)
         } else {
             None
@@ -1370,13 +1429,16 @@ impl<'src> Parser<'src> {
         self.expect(&Token::Function, "expected 'function'")?;
 
         let name = match self.peek().clone() {
-            Token::Ident(n) => n,
+            Token::Ident(n) => {
+                self.advance();
+                n
+            }
             _ => {
-                self.error("expected function name");
-                return None;
+                self.error_no_sync("expected function name");
+                let _ = self.recover_to(&[Token::LParen, Token::Arrow, Token::LBrace]);
+                "__parse_error__".to_string()
             }
         };
-        self.advance();
 
         self.expect(&Token::LParen, "expected '(' after function name")?;
 
@@ -1392,7 +1454,7 @@ impl<'src> Parser<'src> {
 
         // Optional return type
         let return_type = if self.matches(&Token::Colon) {
-            let (t, _) = self.parse_type_expr()?;
+            let (t, _) = self.parse_type_expr_or_error();
             Some(t)
         } else {
             None
@@ -1429,8 +1491,10 @@ impl<'src> Parser<'src> {
             }
             FuncBody::Block(Box::new(block_expr))
         } else {
-            self.error("expected '=>' or '{' for function body");
-            return None;
+            self.error_no_sync("expected '=>' or '{' for function body");
+            let _ = self.recover_to(&[Token::Semicolon, Token::RBrace, Token::Function, Token::Type, Token::Protocol]);
+            self.matches(&Token::Semicolon);
+            FuncBody::Inline(Box::new(self.error_expr()))
         };
 
         // Use the body expression's span end instead of self.current.span.end
@@ -1448,13 +1512,16 @@ impl<'src> Parser<'src> {
         self.expect(&Token::Type, "expected 'type'")?;
 
         let name = match self.peek().clone() {
-            Token::Ident(n) => n,
+            Token::Ident(n) => {
+                self.advance();
+                n
+            }
             _ => {
-                self.error("expected type name");
-                return None;
+                self.error_no_sync("expected type name");
+                let _ = self.recover_to(&[Token::LParen, Token::Inherits, Token::LBrace]);
+                "__parse_error__".to_string()
             }
         };
-        self.advance();
 
         // Optional type parameters
         let mut type_params = Vec::new();
@@ -1472,13 +1539,16 @@ impl<'src> Parser<'src> {
         // Optional inheritance clause
         let inherits = if self.matches(&Token::Inherits) {
             let parent = match self.peek().clone() {
-                Token::Ident(p) => p,
+                Token::Ident(p) => {
+                    self.advance();
+                    p
+                }
                 _ => {
-                    self.error("expected parent type name");
-                    return None;
+                    self.error_no_sync("expected parent type name");
+                    let _ = self.recover_to(&[Token::LParen, Token::LBrace]);
+                    "__parse_error__".to_string()
                 }
             };
-            self.advance();
 
             // Optional constructor arguments
             let args = if self.check(&Token::LParen) {
@@ -1502,13 +1572,24 @@ impl<'src> Parser<'src> {
             let member_start = self.current.span;
 
             let member_name = match self.peek().clone() {
-                Token::Ident(n) => n,
+                Token::Ident(n) => {
+                    self.advance();
+                    n
+                }
                 _ => {
-                    self.error("expected member name");
-                    return None;
+                    self.error_no_sync("expected member name");
+                    if !self.recover_to(&[Token::Semicolon, Token::RBrace]) {
+                        break;
+                    }
+                    if self.matches(&Token::Semicolon) {
+                        continue;
+                    }
+                    if self.check(&Token::RBrace) {
+                        break;
+                    }
+                    continue;
                 }
             };
-            self.advance();
 
             // Peek at next token to determine if method or attribute
             match self.peek() {
@@ -1525,7 +1606,7 @@ impl<'src> Parser<'src> {
                     self.expect(&Token::RParen, "expected ')' after method parameters")?;
 
                     let return_type = if self.matches(&Token::Colon) {
-                        let (t, _) = self.parse_type_expr()?;
+                        let (t, _) = self.parse_type_expr_or_error();
                         Some(t)
                     } else {
                         None
@@ -1559,8 +1640,10 @@ impl<'src> Parser<'src> {
                         }
                         FuncBody::Block(Box::new(block))
                     } else {
-                        self.error("expected '=>' or '{' for method body");
-                        return None;
+                        self.error_no_sync("expected '=>' or '{' for method body");
+                        let _ = self.recover_to(&[Token::Semicolon, Token::RBrace]);
+                        self.matches(&Token::Semicolon);
+                        FuncBody::Inline(Box::new(self.error_expr()))
                     };
 
                     // Use the body expression's span end instead of self.current.span.end
@@ -1574,7 +1657,7 @@ impl<'src> Parser<'src> {
                 Token::Colon | Token::Eq => {
                     // Attribute: name [":" TypeExpr] "=" Expr ";"
                     let attr_type = if self.matches(&Token::Colon) {
-                        let (t, _) = self.parse_type_expr()?;
+                        let (t, _) = self.parse_type_expr_or_error();
                         Some(t)
                     } else {
                         None
@@ -1588,8 +1671,16 @@ impl<'src> Parser<'src> {
                     members.push(TypeMember::Attribute(AttrDef { name: member_name, ty: attr_type, init: Box::new(init), span: attr_span }));
                 }
                 _ => {
-                    self.error("expected ':' or '=' or '(' after member name");
-                    return None;
+                    self.error_no_sync("expected ':' or '=' or '(' after member name");
+                    if !self.recover_to(&[Token::Semicolon, Token::RBrace]) {
+                        break;
+                    }
+                    if self.matches(&Token::Semicolon) {
+                        continue;
+                    }
+                    if self.check(&Token::RBrace) {
+                        break;
+                    }
                 }
             }
         }
@@ -1605,26 +1696,31 @@ impl<'src> Parser<'src> {
         self.expect(&Token::Protocol, "expected 'protocol'")?;
 
         let name = match self.peek().clone() {
-            Token::Ident(n) => n,
+            Token::Ident(n) => {
+                self.advance();
+                n
+            }
             _ => {
-                self.error("expected protocol name");
-                return None;
+                self.error_no_sync("expected protocol name");
+                let _ = self.recover_to(&[Token::Extends, Token::LBrace]);
+                "__parse_error__".to_string()
             }
         };
-        self.advance();
 
         // Optional extends clause
         let extends = if self.matches(&Token::Extends) {
-            match self.peek().clone() {
+            let parent = match self.peek().clone() {
                 Token::Ident(e) => {
                     self.advance();
-                    Some(e)
+                    e
                 }
                 _ => {
-                    self.error("expected parent protocol name");
-                    return None;
+                    self.error_no_sync("expected parent protocol name");
+                    let _ = self.recover_to(&[Token::LBrace]);
+                    "__parse_error__".to_string()
                 }
-            }
+            };
+            Some(parent)
         } else {
             None
         };
@@ -1637,13 +1733,24 @@ impl<'src> Parser<'src> {
             let sig_start = self.current.span;
 
             let method_name = match self.peek().clone() {
-                Token::Ident(n) => n,
+                Token::Ident(n) => {
+                    self.advance();
+                    n
+                }
                 _ => {
-                    self.error("expected method name in protocol");
-                    return None;
+                    self.error_no_sync("expected method name in protocol");
+                    if !self.recover_to(&[Token::Semicolon, Token::RBrace]) {
+                        break;
+                    }
+                    if self.matches(&Token::Semicolon) {
+                        continue;
+                    }
+                    if self.check(&Token::RBrace) {
+                        break;
+                    }
+                    continue;
                 }
             };
-            self.advance();
 
             self.expect(&Token::LParen, "expected '(' after method name in protocol")?;
 
@@ -1652,16 +1759,19 @@ impl<'src> Parser<'src> {
             if !self.check(&Token::RParen) {
                 let param_start = self.current.span;
                 let param_name = match self.peek().clone() {
-                    Token::Ident(n) => n,
+                    Token::Ident(n) => {
+                        self.advance();
+                        n
+                    }
                     _ => {
-                        self.error("expected parameter name in protocol method");
-                        return None;
+                        self.error_no_sync("expected parameter name in protocol method");
+                        let _ = self.recover_to(&[Token::Comma, Token::RParen]);
+                        "__parse_error__".to_string()
                     }
                 };
-                self.advance();
 
                 let (param_ty, end_span) = if self.matches(&Token::Colon) {
-                    let (ty, span) = self.parse_type_expr()?;
+                    let (ty, span) = self.parse_type_expr_or_error();
                     (Some(ty), span)
                 } else {
                     (None, self.current.span)
@@ -1672,16 +1782,19 @@ impl<'src> Parser<'src> {
                 while self.matches(&Token::Comma) {
                     let param_start = self.current.span;
                     let pname = match self.peek().clone() {
-                        Token::Ident(n) => n,
+                        Token::Ident(n) => {
+                            self.advance();
+                            n
+                        }
                         _ => {
-                            self.error("expected parameter name in protocol method");
-                            return None;
+                            self.error_no_sync("expected parameter name in protocol method");
+                            let _ = self.recover_to(&[Token::Comma, Token::RParen]);
+                            "__parse_error__".to_string()
                         }
                     };
-                    self.advance();
 
                     let (pty, end_span) = if self.matches(&Token::Colon) {
-                        let (ty, span) = self.parse_type_expr()?;
+                        let (ty, span) = self.parse_type_expr_or_error();
                         (Some(ty), span)
                     } else {
                         (None, self.current.span)
@@ -1693,7 +1806,7 @@ impl<'src> Parser<'src> {
 
             self.expect(&Token::RParen, "expected ')' after protocol method parameters")?;
             self.expect(&Token::Colon, "expected ':' for protocol method return type")?;
-            let (return_type, _) = self.parse_type_expr()?;
+            let (return_type, _) = self.parse_type_expr_or_error();
             let semi = self.expect(&Token::Semicolon, "expected ';' after protocol method signature")?;
 
             let sig_span = Span { start: sig_start.start, end: semi.span.end };
