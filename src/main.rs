@@ -4,6 +4,8 @@ mod lexer;          // lexer module
 mod parser;         // parser module
 mod evaluator;      // evaluator module
 mod struct_printer; // structure printer module
+#[path = "semantic/semantic.rs"]
+mod semantic;       // semantic checker module
 use struct_printer::test_program; // import test_program directly
 
 
@@ -338,7 +340,7 @@ fn main() {
 
     test_program(false, r#"
         function sum_until(max : Number): Number {
-            let result = 0, i = 0 in
+            let result = 0, i = 0 in 
             while (i < max) {
                 result := result + i;
                 i := i + 1;
@@ -386,16 +388,16 @@ fn main() {
     "#);
 
     test_program(false, r#"
-        let a = 10 in {
+        let a = 10, c = 0 in {
             let b = 20 in {
-                a := a + b;
+                a := a + b + c;
                 a
             }
         };
     "#);
 
     test_program(false, r#"
-        let v = [1, 2, 3, 4] in v[2];
+        let v = [1, 2, (2+4), 3, 4] in v[2];
     "#);
 
     test_program(false, r#"

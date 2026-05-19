@@ -1,5 +1,6 @@
 use crate::lexer::lexer::{Span, TokenStream};
 use crate::parser::{Decl, Expr, FuncBody, FuncDecl, Param, Parser, Program, TypeExpr};
+use crate::semantic;
 
 #[derive(Clone)]
 struct TreePrinter {
@@ -1000,7 +1001,18 @@ pub fn test_program(skip: bool, src: &str) {
         return;
     }
 
+    let program = program_result.unwrap();
+    let semantic_errors = semantic::check_program(&program);
+    if !semantic_errors.is_empty() {
+        println!("\nSemantic Errors:");
+        for e in &semantic_errors {
+            println!("  {}", e);
+        }
+        println!("\nSemantic Error: no se pudo validar el programa");
+        return;
+    }
+
     // Aquí ya NO puede haber errores
     println!("\nAST:");
-    print_program(&program_result.unwrap());
+    print_program(&program);
 }

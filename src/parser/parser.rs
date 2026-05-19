@@ -56,6 +56,42 @@ impl<'src> Parser<'src> {
         &self.current.token == token
     }
 
+    /// Peek the next token (after current) without consuming it.
+    fn peek_next_token(&mut self) -> Option<Token> {
+        self.tokens.peek_n(0).map(|t| t.token)
+    }
+
+    /// Does a token represent the start of an expression?
+    fn token_starts_expr(token: &Token) -> bool {
+        matches!(
+            token,
+            Token::Number(_)
+                | Token::StringLit(_)
+                | Token::True
+                | Token::False
+                | Token::Ident(_)
+                | Token::SelfKw
+                | Token::Base
+                | Token::New
+                | Token::LParen
+                | Token::LBrace
+                | Token::LBracket
+                | Token::Let
+                | Token::If
+                | Token::While
+                | Token::For
+                | Token::Minus
+                | Token::Bang
+        )
+    }
+
+    /// Does the next token start a new expression?
+    fn next_starts_expr(&mut self) -> bool {
+        self.tokens
+            .peek_n(0)
+            .map_or(false, |t| Self::token_starts_expr(&t.token))
+    }
+
     /// Consume the token if it matches exactly.
     pub fn matches(&mut self, expected: &Token) -> bool {
         if self.check(expected) {
@@ -1224,10 +1260,34 @@ impl<'src> Parser<'src> {
         }
 
         self.expect(&Token::In, "expected 'in' after let bindings")?;
-        let body = self.parse_expr()?;
 
-        let span = Span { start: start_span.start, end: body.span().end };
-        Some(Expr::Let { bindings, body: Box::new(body), span })
+        let first_body = match self.parse_expr() {
+            Some(e) => e,
+            None => self.error_expr(),
+        };
+
+        // Allow an implicit block after `in` when the next token starts an expression.
+        if self.check(&Token::Semicolon) && self.next_starts_expr() {
+            let mut exprs = vec![first_body];
+
+            while self.check(&Token::Semicolon) && self.next_starts_expr() {
+                self.advance(); // consume ';'
+                let expr = match self.parse_expr() {
+                    Some(e) => e,
+                    None => self.error_expr(),
+                };
+                exprs.push(expr);
+            }
+
+            let end_span = exprs.last().map(|e| e.span().end).unwrap_or(start_span.end);
+            let block_span = Span { start: start_span.start, end: end_span };
+            let body = Expr::Block { exprs, span: block_span };
+            let span = Span { start: start_span.start, end: block_span.end };
+            return Some(Expr::Let { bindings, body: Box::new(body), span });
+        }
+
+        let span = Span { start: start_span.start, end: first_body.span().end };
+        Some(Expr::Let { bindings, body: Box::new(first_body), span })
     }
 
     // Parse `if` expression with mandatory else: if (cond) then_expr (elif (cond) expr)* else expr
