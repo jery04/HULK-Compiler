@@ -10,89 +10,21 @@ use struct_printer::test_program; // import test_program directly
 
 fn main() {
 
-    test_program(false, r#"
-        type A {
-            value: Number = 10;
-            getValue() => self.value;
-            inc() {
-                self.value := self.value + 1;
-                self.value
-            }
-        }
+    test_program(true, r#"
+        
+        function cuadrado(x) => x * x;
+        print(42)
+        function saludo(nombre) => "Hola " @ nombre;
 
-        type Person(name: String, age: Number) inherits A {
-            name: String = name;
-            age: Number = age;
-
-            getName() => self.name;
-
-            birthday() {
-                self.age := self.age + 1;
-                self.age
-            }
-
-            isAdult() => self.age >= 18;
-        }
-
-        function greet(p: Person) {
-            print("Hola " @@ p.getName());
-            p.getValue()
-        }
-
-        function makePeople(n: Number) {
-            let result: Person[] = [] in
-            for (i in range(0, n)) {
-                let p = new Person("User" @@ i, i + 10) in (
-                    result := result @@ [p];
-                );
-            };
-            result
-        }
-
-        protocol Printable {
-            printSelf(x): String;
-        }
-
-        type Box(value: Number) {
-            value: Number = value;
-
-            double() => self.value * 2;
-        }
-	
-        let xs = [1,2,3,4,5] in
-        let ys = [x*2 | x in xs] in
-        let p = new Person("Jery", 25) in
-        let b = new Box(99) in
         {
-            print("Adult? " @@ (if (p.isAdult()) "yes" else "no"));
-
-            let i = 0 in
-            while (i < 3) {
-                print("Loop: " @@ i);
-                i := i + 1;
-            };
-
-            print("People list:");
-            let ps = makePeople(5) in
-            for (q in ps) {
-                print(q.getName() @@ " age=" @@ q.age);
-            };
-
-            print("Box double: " @@ b.double());
-
-            if (b is Box) {
-                let bb: Box = b as Box in {
-                    print("Downcast ok: " @@ bb.value);
-                }
-            } else {
-    			"No box"		
-			};
-
-            let f = (x: Number, y: Number) -> Number => x + y in
-            print("Functor sum: " @@ f(10, 20));
-
-        };
+            let n = 5 in {
+                print("El cuadrado de " @ n @ " es " @ cuadrado(n));
+                print(saludo("Jery"));
+            }
+        }
     "#);
+
+    
 
     // Hay que seguir trabajando sobre este caso
     test_program(false, r#"
