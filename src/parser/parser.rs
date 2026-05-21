@@ -809,32 +809,14 @@ impl<'src> Parser<'src> {
                 // Allow parentheses to contain one or more expressions separated by ';',
                 // so forms like `( a := a + 1; a )` or `(expr)` are accepted.
                 self.advance(); // consume '('
-
-                // Collect one or more expressions inside parentheses.
-                let mut exprs: Vec<Expr> = Vec::new();
-                while !self.check(&Token::RParen) && !self.is_at_end() {
-                    let e = self.parse_expr()?;
-                    exprs.push(e);
-
-                    // If there's a semicolon, consume it and continue parsing more expressions.
-                    if self.matches(&Token::Semicolon) {
-                        // continue to next expression
-                        continue;
-                    } else {
-                        // no semicolon means likely single expression or end
-                        break;
-                    }
-                }
-
+                let inner = match self.parse_expr() {
+                    Some(e) => e,
+                    None => self.error_expr(),
+                };
                 let rparen = self.expect(&Token::RParen, "expected ')' after expression")?;
                 let span = Span { start: lparen_span.start, end: rparen.span.end };
-
-                if exprs.len() == 1 {
-                    let inner = Self::set_expr_span(exprs.into_iter().next().unwrap(), span);
-                    Some(inner)
-                } else {
-                    Some(Expr::Block { exprs, span })
-                }
+                Some(Self::set_expr_span(inner, span))
+                
             }
 
             Token::LBrace => {
@@ -1251,45 +1233,25 @@ impl<'src> Parser<'src> {
 
     // Parse `let` expression: "let" LetBinding ("," LetBinding)* "in" Expr
     fn parse_let(&mut self) -> Option<Expr> {
-        let start_span = self.current.span;
-        self.advance(); // consume 'let'
+    let start_span = self.current.span;
+    self.advance(); // consume 'let'
 
-        let mut bindings = Vec::new();
+    let mut bindings = Vec::new();
+    bindings.push(self.parse_let_binding()?);
+
+    while self.matches(&Token::Comma) {
         bindings.push(self.parse_let_binding()?);
+    }
 
-        while self.matches(&Token::Comma) {
-            bindings.push(self.parse_let_binding()?);
-        }
+    self.expect(&Token::In, "expected 'in' after let bindings")?;
 
-        self.expect(&Token::In, "expected 'in' after let bindings")?;
+    let body = match self.parse_expr() {
+        Some(e) => e,
+        None => self.error_expr(),
+    };
 
-        let first_body = match self.parse_expr() {
-            Some(e) => e,
-            None => self.error_expr(),
-        };
-
-        // Allow an implicit block after `in` when the next token starts an expression.
-        if self.check(&Token::Semicolon) && self.next_starts_expr() {
-            let mut exprs = vec![first_body];
-
-            while self.check(&Token::Semicolon) && self.next_starts_expr() {
-                self.advance(); // consume ';'
-                let expr = match self.parse_expr() {
-                    Some(e) => e,
-                    None => self.error_expr(),
-                };
-                exprs.push(expr);
-            }
-
-            let end_span = exprs.last().map(|e| e.span().end).unwrap_or(start_span.end);
-            let block_span = Span { start: start_span.start, end: end_span };
-            let body = Expr::Block { exprs, span: block_span };
-            let span = Span { start: start_span.start, end: block_span.end };
-            return Some(Expr::Let { bindings, body: Box::new(body), span });
-        }
-
-        let span = Span { start: start_span.start, end: first_body.span().end };
-        Some(Expr::Let { bindings, body: Box::new(first_body), span })
+    let span = Span { start: start_span.start, end: body.span().end };
+    Some(Expr::Let { bindings, body: Box::new(body), span })
     }
 
     // Parse `if` expression with mandatory else: if (cond) then_expr (elif (cond) expr)* else expr
@@ -1409,48 +1371,43 @@ impl<'src> Parser<'src> {
 
     /// Parse a complete HULK program: decls followed by global expression.
     pub fn parse_program(&mut self) -> Option<Program> {
-        let start_span = self.current.span;
-        let mut decls = Vec::new();
+    let start_span = self.current.span;
+    let mut decls = Vec::new();
 
-        // Parse zero or more declarations (Function, Type, Protocol)
-        // On error, error() triggers synchronize() to recover and try next declaration
-        loop {
-            match self.peek() {
-                Token::Function => {
-                    match self.parse_func_decl() {
-                        Some(f) => decls.push(Decl::Function(f)),
-                        None => {}
-                    }
+    loop {
+        match self.peek() {
+            Token::Function => {
+                match self.parse_func_decl() {
+                    Some(f) => decls.push(Decl::Function(f)),
+                    None => {}
                 }
-                Token::Type => {
-                    match self.parse_type_decl() {
-                        Some(t) => decls.push(Decl::Type(t)),
-                        None => {}
-                    }
-                }
-                Token::Protocol => {
-                    match self.parse_protocol_decl() {
-                        Some(p) => decls.push(Decl::Protocol(p)),
-                        None => {}
-                    }
-                }
-                _ => break,
             }
+            Token::Type => {
+                match self.parse_type_decl() {
+                    Some(t) => decls.push(Decl::Type(t)),
+                    None => {}
+                }
+            }
+            Token::Protocol => {
+                match self.parse_protocol_decl() {
+                    Some(p) => decls.push(Decl::Protocol(p)),
+                    None => {}
+                }
+            }
+            _ => break,
         }
+    }
 
-        // Parse optional global expression
-        let expr = if self.is_at_end() {
-            // If we're at EOF and have only declarations, create a unit expression
-            Box::new(Expr::Ident { name: "()".to_string(), span: start_span })
-        } else {
-            Box::new(self.parse_expr()?)
-        };
+    if self.is_at_end() {
+        self.error_no_sync("expected a global expression but found end of file");
+        return None;
+    }
 
-        // Consume optional trailing semicolon
-        self.matches(&Token::Semicolon);
+    let expr = Box::new(self.parse_expr()?);
+    self.matches(&Token::Semicolon);
 
-        let span = Span { start: start_span.start, end: expr.span().end };
-        Some(Program { decls, expr, span })
+    let span = Span { start: start_span.start, end: expr.span().end };
+    Some(Program { decls, expr, span })
     }
 
     // Parse a parameter for functions/methods/type params

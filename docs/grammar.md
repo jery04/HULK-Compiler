@@ -95,7 +95,7 @@ Expr        = LetExpr
             | ForExpr
             | AssignExpr ;
 
-AssignExpr  = IDENT ":=" AssignExpr     (* derecho-asociativo *)
+AssignExpr  = PostfixExpr ":=" AssignExpr  (* derecho asosiativo *)
             | OrExpr ;
 
 OrExpr      = OrExpr "|" AndExpr        (* izquierdo-asociativo *)

@@ -24,7 +24,7 @@ fn parse_source(source: &str) -> Option<Program> {
 fn test_addition_left_associative() {
     // 1 + 2 + 3 should parse as (1 + 2) + 3, not 1 + (2 + 3)
     // We verify by checking the AST structure.
-    let source = "function f() => 1 + 2 + 3;";
+    let source = "1 + 2 + 3";
     let result = parse_source(source);
     
     assert!(result.is_some(), "Should parse successfully");
@@ -34,21 +34,21 @@ fn test_addition_left_associative() {
 
 #[test]
 fn test_subtraction_left_associative() {
-    let source = "function f() => 1 - 2 - 3;";
+    let source = "1 - 2 - 3";
     let result = parse_source(source);
     assert!(result.is_some(), "1 - 2 - 3 should be left-associative");
 }
 
 #[test]
 fn test_multiplication_left_associative() {
-    let source = "function f() => 2 * 3 * 4;";
+    let source = "2 * 3 * 4";
     let result = parse_source(source);
     assert!(result.is_some(), "2 * 3 * 4 should be left-associative");
 }
 
 #[test]
 fn test_division_left_associative() {
-    let source = "function f() => 8 / 4 / 2;";
+    let source = "8 / 4 / 2";
     let result = parse_source(source);
     assert!(result.is_some(), "8 / 4 / 2 should be left-associative");
 }
@@ -56,7 +56,7 @@ fn test_division_left_associative() {
 #[test]
 fn test_mixed_precedence_expr_term() {
     // 1 + 2 * 3 should be 1 + (2 * 3) due to precedence, not (1 + 2) * 3
-    let source = "function f() => 1 + 2 * 3;";
+    let source = "1 + 2 * 3";
     let result = parse_source(source);
     assert!(result.is_some(), "Precedence: * before +");
 }
@@ -68,28 +68,28 @@ fn test_mixed_precedence_expr_term() {
 #[test]
 fn test_power_right_associative() {
     // 2 ^ 3 ^ 2 should be 2 ^ (3 ^ 2) = 2 ^ 9 = 512
-    let source = "function f() => 2 ^ 3 ^ 2;";
+    let source = "2 ^ 3 ^ 2";
     let result = parse_source(source);
     assert!(result.is_some(), "Power operator should parse with right-associativity");
 }
 
 #[test]
 fn test_power_with_parenthesized_left_grouping() {
-    let source = "function f() => (2 ^ 3) ^ 2;";
+    let source = "(2 ^ 3) ^ 2";
     let result = parse_source(source);
     assert!(result.is_some(), "Parenthesized power grouping should parse");
 }
 
 #[test]
 fn test_power_mixed_with_term_and_expr() {
-    let source = "function f() => 2 + 3 * 2 ^ 3;";
+    let source = "2 + 3 * 2 ^ 3";
     let result = parse_source(source);
     assert!(result.is_some(), "Mixed precedence with +, *, ^ should parse");
 }
 
 #[test]
 fn test_basic_arithmetic_chain_parse() {
-    let source = "function f() => 7 + 5 - 3 * 2 / 1 % 4;";
+    let source = "1 + 2 - 3 * 4 / 5 + 6";
     let result = parse_source(source);
     assert!(result.is_some(), "Basic arithmetic chain should parse");
 }
@@ -100,28 +100,28 @@ fn test_basic_arithmetic_chain_parse() {
 
 #[test]
 fn test_unary_negation_number() {
-    let source = "function f() => -5;";
+    let source = "-5";
     let result = parse_source(source);
     assert!(result.is_some(), "-5 should parse as unary negation");
 }
 
 #[test]
 fn test_unary_negation_identifier() {
-    let source = "function f() => -x;";
+    let source = "-x";
     let result = parse_source(source);
     assert!(result.is_some(), "-x should parse as unary negation of identifier");
 }
 
 #[test]
 fn test_unary_negation_in_expr() {
-    let source = "function f() => -5 + 3;";
+    let source = "-5 + 3";
     let result = parse_source(source);
     assert!(result.is_some(), "-5 + 3 should parse");
 }
 
 #[test]
 fn test_nested_unary() {
-    let source = "function f() => --x;";
+    let source = "--x";
     let result = parse_source(source);
     assert!(result.is_some(), "--x (double negation) should parse");
 }
@@ -132,42 +132,42 @@ fn test_nested_unary() {
 
 #[test]
 fn test_simple_function_call() {
-    let source = "function f() => foo(1, 2);";
+    let source = "foo(1, 2)";
     let result = parse_source(source);
     assert!(result.is_some(), "foo(1, 2) should parse as function call");
 }
 
 #[test]
 fn test_function_call_single_arg() {
-    let source = "function f() => bar(x);";
+    let source = "bar(x)";
     let result = parse_source(source);
     assert!(result.is_some(), "bar(x) should parse");
 }
 
 #[test]
 fn test_function_call_no_args() {
-    let source = "function f() => foo();";
+    let source = "foo()";
     let result = parse_source(source);
     assert!(result.is_some(), "foo() should parse with no arguments");
 }
 
 #[test]
 fn test_function_call_with_builtin() {
-    let source = "function f() => bar(x, sin(1));";
+    let source = "bar(x, sin(1))";
     let result = parse_source(source);
     assert!(result.is_some(), "Function call with builtin as argument");
 }
 
 #[test]
 fn test_nested_function_calls() {
-    let source = "function f() => nested(a(b(1), 2), 3);";
+    let source = "nested(a(b(1), 2), 3)";
     let result = parse_source(source);
     assert!(result.is_some(), "Nested function calls should parse");
 }
 
 #[test]
 fn test_function_call_with_arithmetic() {
-    let source = "function f() => foo(1 + 2, 3 * 4);";
+    let source = "foo(1 + 2, 3 * 4)";
     let result = parse_source(source);
     assert!(result.is_some(), "Function calls with arithmetic expressions");
 }
@@ -178,7 +178,7 @@ fn test_function_call_with_arithmetic() {
 
 #[test]
 fn test_inline_function() {
-    let source = "function f(x) => x + 1;";
+    let source = "function f(x) => x + 1; f(5)";
     let result = parse_source(source);
     assert!(result.is_some(), "Inline function should parse");
     
@@ -192,7 +192,7 @@ fn test_inline_function() {
 
 #[test]
 fn test_block_function() {
-    let source = "function f(x) { x + 1; x + 2 }";
+    let source = "function f(x) { x + 1; x + 2 }; f(5)";
     let result = parse_source(source);
     assert!(result.is_some(), "Block function should parse");
     
@@ -203,7 +203,7 @@ fn test_block_function() {
 
 #[test]
 fn test_function_multiple_params() {
-    let source = "function add(a, b) => a + b;";
+    let source = "function add(a, b) => a + b; add(2, 3)";
     let result = parse_source(source);
     assert!(result.is_some());
     
@@ -216,7 +216,7 @@ fn test_function_multiple_params() {
 
 #[test]
 fn test_function_with_type_annotations() {
-    let source = "function f(x: Number) => x + 1;";
+    let source = "function f(x: Number) => x + 1; f(5)";
     let result = parse_source(source);
     assert!(result.is_some(), "Function with type annotation should parse");
 }
@@ -227,21 +227,21 @@ fn test_function_with_type_annotations() {
 
 #[test]
 fn test_boolean_true() {
-    let source = "function f() => true;";
+    let source = "true";
     let result = parse_source(source);
     assert!(result.is_some(), "true constant should parse");
 }
 
 #[test]
 fn test_boolean_false() {
-    let source = "function f() => false;";
+    let source = "false";
     let result = parse_source(source);
     assert!(result.is_some(), "false constant should parse");
 }
 
 #[test]
 fn test_boolean_in_expression() {
-    let source = "function f() => true + false;";
+    let source = "true + false";
     let result = parse_source(source);
     // Parse succeeds; semantic analysis will handle bool+bool type error
     assert!(result.is_some(), "Boolean arithmetic parses (semantic check later)");
@@ -253,21 +253,21 @@ fn test_boolean_in_expression() {
 
 #[test]
 fn test_complex_expression_1() {
-    let source = "function f() => 2 * 3 + 4 * 5;";
+    let source = "2 * 3 + 4 * 5";
     let result = parse_source(source);
     assert!(result.is_some());
 }
 
 #[test]
 fn test_complex_expression_2() {
-    let source = "function f() => -5 + 3 * 2 - -1;";
+    let source = "-5 + 3 * 2 - -1";
     let result = parse_source(source);
     assert!(result.is_some());
 }
 
 #[test]
 fn test_grouped_expression() {
-    let source = "function f() => (1 + 2) * 3;";
+    let source = "(1 + 2) * 3";
     let result = parse_source(source);
     assert!(result.is_some());
 }
@@ -278,6 +278,7 @@ fn test_multiple_functions() {
         function f() => 1;
         function g(x) => x + 1;
         function h(a, b) => a * b;
+        f()
     "#;
     let result = parse_source(source);
     assert!(result.is_some(), "Should parse multiple function definitions");
@@ -320,54 +321,48 @@ fn test_malformed_function_recovers() {
 
 #[test]
 fn test_empty_function_call() {
-    let source = "function f() => foo();";
+    let source = "foo()";
     let result = parse_source(source);
     assert!(result.is_some());
 }
 
 #[test]
 fn test_single_number() {
-    let source = "function f() => 42;";
+    let source = "42";
     let result = parse_source(source);
     assert!(result.is_some());
 }
 
 #[test]
 fn test_single_identifier() {
-    let source = "function f() => x;";
+    let source = "x";
     let result = parse_source(source);
     assert!(result.is_some());
 }
 
 #[test]
 fn test_constants() {
-    let source = "function f() => PI + E;";
+    let source = "PI + E";
     let result = parse_source(source);
     assert!(result.is_some(), "Mathematical constants should parse");
 }
 
 #[test]
 fn test_builtin_functions() {
-    let source = "function f() => sin(1) + cos(2) + sqrt(3) + exp(4) + log(5);";
+    let source = "sin(1) + cos(2) + sqrt(3) + exp(4) + log(5)";
     let result = parse_source(source);
     assert!(result.is_some(), "Builtin functions should parse");
 }
 
 #[test]
 fn test_vector_generator_parse() {
-    let source = "function f() => [x^2 | x in range(1,10)];";
+    let source = "[x^2 | x in range(1,10)]";
     let result = parse_source(source);
     assert!(result.is_some(), "Vector generator should parse");
 
     if let Some(program) = result {
-        if let Decl::Function(func_def) = &program.decls[0] {
-            if let FuncBody::Inline(expr) = &func_def.body {
-                assert!(matches!(**expr, Expr::VectorGen { .. }));
-            } else {
-                panic!("Expected inline function body");
-            }
-        } else {
-            panic!("Expected function declaration");
-        }
+        // The global expression should be a vector generator
+        assert!(matches!(*program.expr, Expr::VectorGen { .. }),
+                "Expected vector generator expression");
     }
 }
