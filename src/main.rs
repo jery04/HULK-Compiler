@@ -10,7 +10,7 @@ use struct_printer::test_program; // import test_program directly
 
 fn main() {
 
-    test_program(true, r#"
+    test_program(false, r#"
         type Person(name, age) {
             name: String = name;
             age: Number = age;
