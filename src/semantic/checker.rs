@@ -885,6 +885,9 @@ impl SemanticChecker {
                 self.mark_iterable_usage(iterable);
                 self.with_scope(|this| {
                     this.define_var(var, expr_span(expr));
+                    if let Some(element_ty) = this.infer_iterable_element_type(iterable) {
+                        this.ctx.set_var_type(var, element_ty);
+                    }
                     this.check_expr(body);
                     if let Some(loop_item_ty) = this.ctx.var_type(var) {
                         this.record_iterable_element_type(iterable, loop_item_ty);
@@ -944,6 +947,9 @@ impl SemanticChecker {
                 self.check_expr(iterable);
                 self.with_scope(|this| {
                     this.define_var(var, expr_span(expr));
+                    if let Some(element_ty) = this.infer_iterable_element_type(iterable) {
+                        this.ctx.set_var_type(var, element_ty);
+                    }
                     this.check_expr(element);
                     if let Some(loop_item_ty) = this.ctx.var_type(var) {
                         this.record_iterable_element_type(iterable, loop_item_ty);
@@ -1007,6 +1013,34 @@ impl SemanticChecker {
         if is_placeholder(name) {
             return;
         }
+
+        let starts_with_uppercase = name
+            .chars()
+            .next()
+            .map(char::is_uppercase)
+            .unwrap_or(false);
+
+        if starts_with_uppercase {
+            if !self.ctx.is_constructible_type(name) {
+                self.report(span, format!(
+                    "type '{}' not defined",
+                    name
+                ));
+                return;
+            }
+
+            if let Some(expected) = self.ctx.type_param_count(name) {
+                if expected != args.len() {
+                    self.report(span, format!(
+                        "type '{}' requires {} arguments",
+                        name,
+                        expected
+                    ));
+                }
+            }
+            return;
+        }
+
         if self.ctx.is_var_defined(name) {
             return;
         }
@@ -1117,6 +1151,13 @@ impl SemanticChecker {
                             self.ctx
                                 .builtin_function_signature(name, args.len())
                                 .and_then(|signature| signature.return_type.clone())
+                        })
+                        .or_else(|| {
+                            if self.ctx.is_constructible_type(name) {
+                                Some(SimpleType::Named(name.clone()))
+                            } else {
+                                None
+                            }
                         });
                 }
                 None
@@ -1381,6 +1422,14 @@ impl SemanticChecker {
                     }
                 }
             }
+        }
+    }
+
+    /// Infer the type of a single element yielded by an iterable expression.
+    fn infer_iterable_element_type(&self, expr: &Expr) -> Option<SimpleType> {
+        match self.infer_simple_type(expr)? {
+            SimpleType::Vector(inner) => Some(*inner),
+            _ => None,
         }
     }
 

@@ -110,6 +110,44 @@ fn reports_call_to_nonexistent_function() {
 }
 
 #[test]
+fn allows_call_syntax_for_constructible_type_names() {
+    let errors = semantic_errors(r#"
+        type Person(name, age) {
+            name: String = name;
+            age: Number = age;
+        }
+
+        let people = [Person("Ana", 20), Person("Luis", 25)] in
+            people;
+    "#);
+
+    assert!(errors.is_empty(), "expected no semantic errors, got: {:?}", errors);
+}
+
+#[test]
+fn uppercase_call_reports_missing_type_instead_of_missing_function() {
+    let errors = semantic_errors(r#"
+        Fantasma(1);
+    "#);
+
+    assert_has_error(&errors, "type 'Fantasma' not defined");
+}
+
+#[test]
+fn uppercase_call_reports_type_arity_errors() {
+    let errors = semantic_errors(r#"
+        type Person(name, age) {
+            name: String = name;
+            age: Number = age;
+        }
+
+        Person("Ana");
+    "#);
+
+    assert_has_error(&errors, "type 'Person' requires 2 arguments");
+}
+
+#[test]
 fn reports_invalid_arity_for_user_function() {
     let errors = semantic_errors(r#"
         function suma(a, b) => a + b;
@@ -413,6 +451,28 @@ fn reports_invalid_argument_types_for_method_call_on_variable() {
     "#);
 
     assert_has_error(&errors, "method 'm' argument 1 expects String, found Number");
+}
+
+#[test]
+fn method_call_on_for_loop_variable_uses_iterable_element_type() {
+    let errors = semantic_errors(r#"
+        type Person(name, age) {
+            name: String = name;
+            age: Number = age;
+
+            greet() => print("Hola, soy " @ self.name @ " y tengo " @ self.age @ " años");
+        }
+
+        {
+            let people = [Person("Ana", 20), Person("Luis", 25)] in {
+                for (p in people) {
+                    p.greetol();
+                }
+            }
+        }
+    "#);
+
+    assert_has_error(&errors, "method 'greetol' with arity 0 not defined on type 'Person'");
 }
 
 #[test]

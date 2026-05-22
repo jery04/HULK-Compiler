@@ -10,6 +10,23 @@ use struct_printer::test_program; // import test_program directly
 
 fn main() {
 
+    test_program(true, r#"
+        type Person(name, age) {
+            name: String = name;
+            age: Number = age;
+
+            greet() => print("Hola, soy " @ self.name @ " y tengo " @ self.age @ " años");
+        }
+
+        {
+            let people = [Person("Ana", 20), Person("Luis", 25), Person("Jery", 22)] in {
+                for (p in people) {
+                    p.greet();
+                }
+            }
+        }
+    "#);
+    
     test_program(false, r#"
         print(42); 
     "#);
@@ -368,6 +385,14 @@ fn main() {
             }
         }
         nested(5);
+    "#);
+
+    test_program(false, r#"
+        {
+            print(42);
+            print(sin(PI/2));
+            print("Hello World");
+        };
     "#);
 }
 
