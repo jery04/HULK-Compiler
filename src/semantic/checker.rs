@@ -778,6 +778,8 @@ impl SemanticChecker {
                                 ));
                             }
                         }
+                        self.constrain_operand_type(left, right_ty.as_ref());
+                        self.constrain_operand_type(right, left_ty.as_ref());
                     }
                     BinOp::Concat => {
                         if let (Some(lt), Some(rt)) = (&left_ty, &right_ty) {
@@ -1328,9 +1330,18 @@ impl SemanticChecker {
             return;
         }
 
+        self.constrain_operand_type(expr, other_ty);
+    }
+
+    /// Constrain an identifier operand to the type required by the surrounding expression.
+    fn constrain_operand_type(&mut self, expr: &Expr, other_ty: Option<&SimpleType>) {
+        let Some(other_ty) = other_ty else {
+            return;
+        };
+
         if let Expr::Ident { name, .. } = expr {
             if self.ctx.var_type(name).is_none() && self.ctx.is_var_defined(name) {
-                self.ctx.set_var_type_in_scope(name, SimpleType::Number);
+                self.ctx.set_var_type_in_scope(name, other_ty.clone());
             }
         }
     }

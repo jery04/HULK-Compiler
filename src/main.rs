@@ -271,7 +271,7 @@ fn main() {
         print(sum_until(10));
     "#);
 
-    test_program(true, r#"
+    test_program(false, r#"
         function sum_vec(v): Number {
             let total = 0 in {
                 for (i in v) {
@@ -286,7 +286,7 @@ fn main() {
                 total
             };
         }
-        print(sum_vec(["te", "f"]));
+        print(sum_vec([1,2,3,4,5]));
     "#);
 
     test_program(false, r#"
@@ -345,7 +345,7 @@ fn main() {
         g();
     "#);
 
-    // Analizar
+    // En espera de Piad
     test_program(false, r#"
         let x = 1 in (
             x := x + 1; 

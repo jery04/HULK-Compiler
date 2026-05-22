@@ -564,6 +564,83 @@ fn sum_vec_report_semantic_errors_vector() {
 }
 
 #[test]
+fn sum_vec_rejects_vector_of_booleans_when_numbers_are_expected() {
+    let errors = semantic_errors(r#"
+        function sum_vec(v): Number {
+            let total = 0 in {
+                for (i in v) {
+                    if (i == true) {
+                        print("Found a true value, adding 1 to total");
+                        total := total + 1;
+                    } else {
+                        total := total + 0;
+                    };
+                };
+                total
+            };
+        }
+        print(sum_vec(["te", "f"]));
+    "#);
+
+    assert_has_error(
+        &errors,
+        "call to 'sum_vec' argument 1 expects Vector<Boolean>, found Vector<String>",
+    );
+}
+
+#[test]
+fn sum_vec_rejects_vector_of_numbers_when_strings_are_expected() {
+    let errors = semantic_errors(r#"
+        function sum_vec(v): Number {
+            let total = 0 in {
+                for (i in v) {
+                    if (i == "texto") {
+                        total := total + 5;
+                    } elif (i == "hola") {
+                        total := total + 0;
+                    } else {
+                        total := total + 10;
+                    };
+                };
+                total
+            };
+        }
+        print(sum_vec([1, 2, 1, 3]));
+    "#);
+
+    assert_has_error(
+        &errors,
+        "call to 'sum_vec' argument 1 expects Vector<String>, found Vector<Number>",
+    );
+}
+
+#[test]
+fn vector_literals_reject_mixed_element_types() {
+    let errors = semantic_errors(r#"
+        function sum_vec(v): Number {
+            let total = 0 in {
+                for (i in v) {
+                    if (i == "texto") {
+                        total := total + 5;
+                    } elif (i == "hola") {
+                        total := total + 0;
+                    } else {
+                        total := total + 10;
+                    };
+                };
+                total
+            };
+        }
+        print(sum_vec([1, 2, "texto", 3]));
+    "#);
+
+    assert_has_error(
+        &errors,
+        "vector with elements of different types (expected Number, found String)",
+    );
+}
+
+#[test]
 fn factorial_reports_multiple_semantic_errors() {
     let errors = semantic_errors(r#"
         function factorial(n: Number, j: String): Number {
