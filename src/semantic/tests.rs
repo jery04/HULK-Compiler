@@ -426,6 +426,77 @@ fn protocol_method_signature_reports_undefined_return_type() {
 }
 
 #[test]
+fn protocol_is_implemented_implicitly_by_matching_methods() {
+    let errors = semantic_errors(r#"
+        protocol Printable {
+            printSelf(): String;
+        }
+
+        type Box {
+            value = 10;
+            printSelf() => "Box(" @ self.value @ ")";
+        }
+
+        let p: Printable = new Box() in print(p.printSelf());
+    "#);
+
+    assert!(errors.is_empty(), "expected no semantic errors, got: {:?}", errors);
+}
+
+#[test]
+fn protocol_accepts_covariant_and_contravariant_overrides() {
+    let errors = semantic_errors(r#"
+        type Animal {}
+        type Dog inherits Animal {}
+
+        protocol Maker {
+            make(input: Dog): Animal;
+        }
+
+        type AnyMaker {
+            make(input: Object) => new Dog();
+        }
+
+        let maker: Maker = new AnyMaker() in maker.make(new Dog());
+    "#);
+
+    assert!(errors.is_empty(), "expected no semantic errors, got: {:?}", errors);
+}
+
+#[test]
+fn protocol_let_binding_reports_why_concrete_type_does_not_match() {
+    let errors = semantic_errors(r#"
+        protocol Printable {
+            printSelf(): String;
+        }
+
+        type Box {
+            value = 10;
+        }
+
+        let p: Printable = new Box() in print(p.printSelf());
+    "#);
+
+    assert_has_error(
+        &errors,
+        "let binding 'p' expects Printable, found Box; Box does not satisfy the requirements of Printable",
+    );
+}
+
+#[test]
+fn protocol_methods_must_be_fully_typed() {
+    let errors = semantic_errors(r#"
+        protocol Broken {
+            hash(): Number;
+            equals(other): Boolean;
+        }
+        0;
+    "#);
+
+    assert_has_error(&errors, "protocol method 'equals' parameter 'other' must be typed");
+}
+
+#[test]
 fn duplicate_function_parameters_report_error() {
     let errors = semantic_errors(r#"
         function repetir(x, x) => x;

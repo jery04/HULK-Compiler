@@ -11,6 +11,32 @@ use struct_printer::test_program; // import test_program directly
 fn main() {
 
     test_program(false, r#"
+        protocol MyProtocol  {
+            greet() : String;
+            alwaysTrue() : Boolean;
+
+        }
+    
+        protocol Printable extends MyProtocol {
+            printSelf() : String;
+            printValue() : Number;
+        }
+
+        type Box {
+            value = 10;
+
+            printSelf(): String => "Box(" @ self.value @ ")";
+            printValue(): Number => self.value;
+            alwaysTrue(): Boolean => true;
+            greet(): String => "Hello, I am a box!";
+
+        }
+
+        let p : Printable = new Box() in print(p.printSelf());
+
+    "#);
+
+    test_program(false, r#"
         function g(a): Number => a+5;
 
         let b: Number = 4*2 in
@@ -49,7 +75,7 @@ fn main() {
         };
     "#);
 
-    test_program(true, r#"
+    test_program(false, r#"
         type B {
             d = 0;
 

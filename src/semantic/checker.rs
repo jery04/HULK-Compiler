@@ -242,7 +242,7 @@ impl SemanticChecker {
             decl.return_type.as_ref().and_then(simple_type_from_type_expr),
             inferred_return_type.clone(),
         ) {
-            if expected != actual {
+            if !self.ctx.simple_type_conforms_to(&actual, &expected) {
                 self.function_return_issues.insert(
                     decl.name.clone(),
                     format!(
@@ -354,6 +354,7 @@ impl SemanticChecker {
         let current_type = CurrentTypeInfo {
             parent: decl.inherits.as_ref().map(|i| i.parent.clone()),
             attrs,
+            attr_types: HashMap::new(),
             methods,
         };
         // Record the discovered attributes and methods in the global context
@@ -361,6 +362,7 @@ impl SemanticChecker {
             &decl.name,
             current_type.parent.clone(),
             current_type.attrs.clone(),
+            current_type.attr_types.clone(),
             current_type.methods.clone(),
         );
         let prev_type = self.ctx.current_type.take();
@@ -373,6 +375,16 @@ impl SemanticChecker {
                 TypeMember::Attribute(attr) => self.check_attr_def(attr),
                 TypeMember::Method(method) => self.check_method_def(method),
             }
+        }
+
+        if let Some(current_type) = self.ctx.current_type.as_ref() {
+            self.ctx.set_type_members(
+                &decl.name,
+                current_type.parent.clone(),
+                current_type.attrs.clone(),
+                current_type.attr_types.clone(),
+                current_type.methods.clone(),
+            );
         }
 
         self.ctx.current_type = prev_type;
@@ -396,6 +408,7 @@ impl SemanticChecker {
         }
 
         let mut method_set = HashMap::new();
+        let mut methods: HashMap<String, HashMap<usize, CallableSignature>> = HashMap::new();
         for method in &decl.methods {
             let entry = method_set
                 .entry(method.name.clone())
@@ -408,7 +421,20 @@ impl SemanticChecker {
                 ));
             }
             self.check_method_sig(method);
+
+            methods
+                .entry(method.name.clone())
+                .or_insert_with(HashMap::new)
+                .insert(
+                    method.params.len(),
+                    CallableSignature {
+                        params: callable_params_from_sig_params(&method.params),
+                        return_type: simple_type_from_type_expr(&method.return_type),
+                    },
+                );
         }
+
+        self.ctx.set_protocol_members(&decl.name, decl.extends.clone(), methods);
     }
 
     /// Check a macro declaration and its parameters/body.
@@ -447,6 +473,12 @@ impl SemanticChecker {
             }
             if let Some(ty) = &param.ty {
                 self.check_type_expr(ty, param.span);
+            } else {
+                self.report(param.span, format!(
+                    "protocol method '{}' parameter '{}' must be typed",
+                    sig.name,
+                    param.name
+                ));
             }
         }
         self.check_type_expr(&sig.return_type, sig.span);
@@ -522,7 +554,7 @@ impl SemanticChecker {
 
         if let Some(expected) = attr.ty.as_ref().and_then(simple_type_from_type_expr) {
             if let Some(actual) = self.infer_simple_type(&attr.init) {
-                if expected != actual {
+                if !self.ctx.simple_type_conforms_to(&actual, &expected) {
                     self.report(
                         attr.span,
                         format!(
@@ -533,6 +565,18 @@ impl SemanticChecker {
                         ),
                     );
                 }
+            }
+        }
+
+        let inferred_attr_type = attr
+            .ty
+            .as_ref()
+            .and_then(simple_type_from_type_expr)
+            .or_else(|| self.infer_simple_type(&attr.init));
+
+        if let Some(current_type) = self.ctx.current_type.as_mut() {
+            if let Some(simple_ty) = inferred_attr_type {
+                current_type.attr_types.insert(attr.name.clone(), simple_ty);
             }
         }
     }
@@ -696,21 +740,15 @@ impl SemanticChecker {
                 } else {
                     // Try to resolve method from the static type of the object
                     if let Some(obj_ty) = self.infer_simple_type(object) {
-                        if let SimpleType::Named(type_name) = obj_ty {
-                            if let Some(signature) = self
-                                .ctx
-                                .type_method_signature(&type_name, method, args.len())
-                                .cloned()
-                            {
-                                self.check_callable_args(method, args, &signature.params, "method", *span);
-                            } else {
-                                self.report(*span, format!(
-                                    "method '{}' with arity {} not defined on type '{}'",
-                                    method,
-                                    args.len(),
-                                    type_name
-                                ));
-                            }
+                        if let Some(signature) = self.method_signature_for_simple_type(&obj_ty, method, args.len()).cloned() {
+                            self.check_callable_args(method, args, &signature.params, "method", *span);
+                        } else if let SimpleType::Named(type_name) = obj_ty {
+                            self.report(*span, format!(
+                                "method '{}' with arity {} not defined on type '{}'",
+                                method,
+                                args.len(),
+                                type_name
+                            ));
                         }
                     }
                 }
@@ -955,7 +993,7 @@ impl SemanticChecker {
                             simple_type_from_type_expr(ty),
                             self.infer_simple_type(&binding.init),
                         ) {
-                            if expected != actual {
+                            if !self.ctx.simple_type_conforms_to(&actual, &expected) {
                                 if let Some(note) = self.callable_return_issue_for_expr(&binding.init) {
                                     let message = format!(
                                         "let binding '{}' expected a {}, but found a value of another type; note: {}",
@@ -967,12 +1005,25 @@ impl SemanticChecker {
                                         .insert(binding.name.clone(), message.clone());
                                     self.report(binding.span, message);
                                 } else {
-                                    let message = format!(
-                                        "let binding '{}' expects {}, found {}",
-                                        binding.name,
-                                        expected.display_name(),
-                                        actual.display_name()
-                                    );
+                                    let expected_name = expected.display_name();
+                                    let actual_name = actual.display_name();
+                                    let message = if self.ctx.is_protocol_defined(&expected_name) {
+                                        format!(
+                                            "let binding '{}' expects {}, found {}; {} does not satisfy the requirements of {} protocol",
+                                            binding.name,
+                                            expected_name,
+                                            actual_name,
+                                            actual_name,
+                                            expected_name
+                                        )
+                                    } else {
+                                        format!(
+                                            "let binding '{}' expects {}, found {}",
+                                            binding.name,
+                                            expected_name,
+                                            actual_name
+                                        )
+                                    };
                                     self.variable_type_issues
                                         .insert(binding.name.clone(), message.clone());
                                     self.report(binding.span, message);
@@ -1251,6 +1302,15 @@ impl SemanticChecker {
                 }
                 None
             }
+            Expr::FieldAccess { object, field, .. } => {
+                if is_self_ref(object) {
+                    return self.ctx.current_type_attr_type(field).cloned();
+                }
+                if let Some(SimpleType::Named(type_name)) = self.infer_simple_type(object) {
+                    return self.ctx.type_attr_type(&type_name, field).cloned();
+                }
+                None
+            }
                 Expr::If { then_expr, elif_branches, else_expr, .. } => {
                     let then_ty = self.infer_simple_type(then_expr)?;
                     for branch in elif_branches {
@@ -1280,12 +1340,9 @@ impl SemanticChecker {
                 }
                 // If the object has a named static type, try to resolve the method signature
                 if let Some(obj_ty) = self.infer_simple_type(object) {
-                    if let SimpleType::Named(type_name) = obj_ty {
-                        return self
-                            .ctx
-                            .type_method_signature(&type_name, method, args.len())
-                            .and_then(|s| s.return_type.clone());
-                    }
+                    return self
+                        .method_signature_for_simple_type(&obj_ty, method, args.len())
+                        .and_then(|s| s.return_type.clone());
                 }
                 None
             }
@@ -1418,7 +1475,7 @@ impl SemanticChecker {
             let Some(actual_ty) = self.infer_simple_type(arg) else {
                 continue;
             };
-            if &actual_ty != expected_ty {
+            if !self.ctx.simple_type_conforms_to(&actual_ty, expected_ty) {
                 self.report(
                     expr_span(arg),
                     format!(
@@ -1519,6 +1576,45 @@ impl SemanticChecker {
         }
     }
 
+    /// Resolve a method signature from a static type in the current checker context.
+    fn method_signature_for_simple_type<'a>(
+        &'a self,
+        obj_ty: &'a SimpleType,
+        method: &str,
+        arity: usize,
+    ) -> Option<&'a CallableSignature> {
+        match obj_ty {
+            SimpleType::Named(type_name) => {
+                if self.ctx.is_protocol_defined(type_name) {
+                    self.ctx.protocol_method_signature(type_name, method, arity)
+                } else {
+                    self.ctx.type_method_signature(type_name, method, arity)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolve a method signature from a static type during scoped inference.
+    fn method_signature_for_simple_type_in_ctx<'a>(
+        &'a self,
+        obj_ty: &'a SimpleType,
+        method: &str,
+        arity: usize,
+        ctx: &'a Context,
+    ) -> Option<&'a CallableSignature> {
+        match obj_ty {
+            SimpleType::Named(type_name) => {
+                if ctx.is_protocol_defined(type_name) {
+                    ctx.protocol_method_signature(type_name, method, arity)
+                } else {
+                    ctx.type_method_signature(type_name, method, arity)
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Infer the return type of a callable body if the expression type is known.
     fn infer_callable_body_type(&self, body: &FuncBody) -> Option<SimpleType> {
         let mut ctx = self.ctx.clone();
@@ -1556,6 +1652,15 @@ impl SemanticChecker {
                 }
                 None
             }
+            Expr::FieldAccess { object, field, .. } => {
+                if is_self_ref(object) {
+                    return ctx.current_type_attr_type(field).cloned();
+                }
+                if let Some(SimpleType::Named(type_name)) = self.infer_expr_with_scopes(object, ctx) {
+                    return ctx.type_attr_type(&type_name, field).cloned();
+                }
+                None
+            }
             Expr::MethodCall { object, method, args, .. } => {
                 if is_self_ref(object) {
                     return ctx
@@ -1563,11 +1668,9 @@ impl SemanticChecker {
                         .and_then(|signature| signature.return_type.clone());
                 }
                 if let Some(obj_ty) = self.infer_expr_with_scopes(object, ctx) {
-                    if let SimpleType::Named(type_name) = obj_ty {
-                        return ctx
-                            .type_method_signature(&type_name, method, args.len())
-                            .and_then(|signature| signature.return_type.clone());
-                    }
+                    return self
+                        .method_signature_for_simple_type_in_ctx(&obj_ty, method, args.len(), ctx)
+                        .and_then(|signature| signature.return_type.clone());
                 }
                 None
             }
@@ -1742,7 +1845,6 @@ impl SemanticChecker {
             Expr::Error { .. } => None,
             Expr::IsType { .. } => Some(SimpleType::Boolean),
             Expr::SelfRef { .. } | Expr::Base { .. } => self.infer_simple_type(expr),
-            Expr::FieldAccess { .. } => self.infer_simple_type(expr),
         }
     }
 
@@ -1760,7 +1862,7 @@ impl SemanticChecker {
             declared_return_type.as_ref(),
             inferred_return_type.as_ref(),
         ) {
-            if expected != actual {
+            if !self.ctx.simple_type_conforms_to(actual, expected) {
                 self.report(
                     span,
                     format!(
@@ -1802,6 +1904,14 @@ fn simple_type_from_type_expr(ty: &TypeExpr) -> Option<SimpleType> {
 
 /// Convert typed parameters into simplified types for call checking.
 fn callable_params_from_params(params: &[Param]) -> Vec<Option<SimpleType>> {
+    params
+        .iter()
+        .map(|param| param.ty.as_ref().and_then(simple_type_from_type_expr))
+        .collect()
+}
+
+/// Convert protocol parameters into simplified types.
+fn callable_params_from_sig_params(params: &[SigParam]) -> Vec<Option<SimpleType>> {
     params
         .iter()
         .map(|param| param.ty.as_ref().and_then(simple_type_from_type_expr))

@@ -18,7 +18,7 @@ pub struct Context {
     function_signatures: HashMap<String, CallableSignature>,
     macros: HashMap<String, HashSet<usize>>,
     types: HashMap<String, TypeInfo>,
-    protocols: HashSet<String>,
+    protocols: HashMap<String, ProtocolInfo>,
     builtin_functions: HashMap<String, HashSet<usize>>,
     builtin_function_signatures: HashMap<String, HashMap<usize, CallableSignature>>,
     builtin_types: HashSet<String>,
@@ -33,6 +33,14 @@ struct TypeInfo {
     param_count: usize,
     parent: Option<String>,
     attrs: HashSet<String>,
+    attr_types: HashMap<String, SimpleType>,
+    methods: HashMap<String, HashMap<usize, CallableSignature>>,
+}
+
+/// Protocol metadata recorded in the context.
+#[derive(Clone)]
+struct ProtocolInfo {
+    extends: Option<String>,
     methods: HashMap<String, HashMap<usize, CallableSignature>>,
 }
 
@@ -41,6 +49,7 @@ struct TypeInfo {
 pub(super) struct CurrentTypeInfo {
     pub(super) parent: Option<String>,
     pub(super) attrs: HashSet<String>,
+    pub(super) attr_types: HashMap<String, SimpleType>,
     pub(super) methods: HashMap<String, HashMap<usize, CallableSignature>>,
 }
 
@@ -54,7 +63,7 @@ impl Context {
             function_signatures: HashMap::new(),
             macros: HashMap::new(),
             types: HashMap::new(),
-            protocols: HashSet::new(),
+            protocols: HashMap::new(),
             builtin_functions: builtin_functions(),
             builtin_function_signatures: builtin_function_signatures(),
             builtin_types: builtin_types(),
@@ -148,6 +157,7 @@ impl Context {
                 param_count,
                 parent: None,
                 attrs: HashSet::new(),
+                attr_types: HashMap::new(),
                 methods: HashMap::new(),
             });
     }
@@ -158,11 +168,13 @@ impl Context {
         name: &str,
         parent: Option<String>,
         attrs: HashSet<String>,
+        attr_types: HashMap<String, SimpleType>,
         methods: HashMap<String, HashMap<usize, CallableSignature>>,
     ) {
         if let Some(t) = self.types.get_mut(name) {
             t.parent = parent;
             t.attrs = attrs;
+            t.attr_types = attr_types;
             t.methods = methods;
         }
     }
@@ -213,9 +225,82 @@ impl Context {
             .and_then(|parent| self.type_method_signature(parent, method, arity))
     }
 
+    /// Get the recorded type of an attribute on the current type or one of its ancestors.
+    pub(super) fn current_type_attr_type(&self, name: &str) -> Option<&SimpleType> {
+        let current = self.current_type.as_ref()?;
+        if let Some(ty) = current.attr_types.get(name) {
+            return Some(ty);
+        }
+
+        current
+            .parent
+            .as_deref()
+            .and_then(|parent| self.type_attr_type(parent, name))
+    }
+
+    /// Get the recorded type of an attribute on a concrete type, following inheritance.
+    pub(super) fn type_attr_type(&self, type_name: &str, name: &str) -> Option<&SimpleType> {
+        let mut current = Some(type_name);
+
+        while let Some(type_name) = current {
+            let type_info = self.types.get(type_name)?;
+            if let Some(ty) = type_info.attr_types.get(name) {
+                return Some(ty);
+            }
+            current = type_info.parent.as_deref();
+        }
+
+        None
+    }
+
     /// Register a protocol name.
     pub(super) fn insert_protocol(&mut self, name: &str) {
-        self.protocols.insert(name.to_string());
+        self.protocols.entry(name.to_string()).or_insert(ProtocolInfo {
+            extends: None,
+            methods: HashMap::new(),
+        });
+    }
+
+    /// Store the methods and parent of a protocol.
+    pub(super) fn set_protocol_members(
+        &mut self,
+        name: &str,
+        extends: Option<String>,
+        methods: HashMap<String, HashMap<usize, CallableSignature>>,
+    ) {
+        if let Some(protocol) = self.protocols.get_mut(name) {
+            protocol.extends = extends;
+            protocol.methods = methods;
+        }
+    }
+
+    /// Get a protocol method signature, following protocol inheritance.
+    pub(super) fn protocol_method_signature(
+        &self,
+        protocol_name: &str,
+        method: &str,
+        arity: usize,
+    ) -> Option<&CallableSignature> {
+        let mut current = Some(protocol_name);
+        let mut seen = HashSet::new();
+
+        while let Some(name) = current {
+            if !seen.insert(name.to_string()) {
+                break;
+            }
+
+            let protocol = self.protocols.get(name)?;
+            if let Some(signature) = protocol
+                .methods
+                .get(method)
+                .and_then(|by_arity| by_arity.get(&arity))
+            {
+                return Some(signature);
+            }
+            current = protocol.extends.as_deref();
+        }
+
+        None
     }
 
     /// Check whether a function with a given arity exists.
@@ -276,24 +361,177 @@ impl Context {
 
     /// Is a protocol defined with this name?
     pub(super) fn is_protocol_defined(&self, name: &str) -> bool {
-        self.protocols.contains(name)
+        self.protocols.contains_key(name)
     }
 
     /// Is a type or protocol defined with this name?
     pub(super) fn is_type_or_protocol_defined(&self, name: &str) -> bool {
-        self.types.contains_key(name) || self.protocols.contains(name)
+        self.types.contains_key(name) || self.protocols.contains_key(name)
     }
 
     /// Is this a known type (builtin, user type or protocol)?
     pub(super) fn is_known_type(&self, name: &str) -> bool {
         self.builtin_types.contains(name)
             || self.types.contains_key(name)
-            || self.protocols.contains(name)
+            || self.protocols.contains_key(name)
     }
 
     /// Is this a constructible type (builtin or user-defined)?
     pub(super) fn is_constructible_type(&self, name: &str) -> bool {
         self.builtin_types.contains(name) || self.types.contains_key(name)
+    }
+
+    /// Check whether a concrete type inherits from another concrete type.
+    pub(super) fn type_is_subtype_of(&self, actual: &str, expected: &str) -> bool {
+        if actual == expected || expected == "Object" {
+            return true;
+        }
+
+        let mut current = Some(actual);
+        let mut seen = HashSet::new();
+
+        while let Some(name) = current {
+            if !seen.insert(name.to_string()) {
+                break;
+            }
+
+            let Some(type_info) = self.types.get(name) else {
+                return false;
+            };
+
+            if type_info.parent.as_deref() == Some(expected) {
+                return true;
+            }
+
+            current = type_info.parent.as_deref();
+        }
+
+        false
+    }
+
+    /// Check whether a concrete type implements a protocol.
+    pub(super) fn type_implements_protocol(&self, type_name: &str, protocol_name: &str) -> bool {
+        let Some(protocol) = self.protocols.get(protocol_name) else {
+            return false;
+        };
+
+        if let Some(parent) = protocol.extends.as_deref() {
+            if !self.type_implements_protocol(type_name, parent) {
+                return false;
+            }
+        }
+
+        for (method_name, by_arity) in &protocol.methods {
+            for (arity, expected_signature) in by_arity {
+                let Some(actual_signature) = self.type_method_signature(type_name, method_name, *arity) else {
+                    return false;
+                };
+                if !self.callable_signature_compatible(actual_signature, expected_signature) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Check whether a protocol conforms to another protocol.
+    pub(super) fn protocol_conforms_to_protocol(
+        &self,
+        actual: &str,
+        expected: &str,
+    ) -> bool {
+        if actual == expected {
+            return true;
+        }
+
+        let Some(actual_info) = self.protocols.get(actual) else {
+            return false;
+        };
+
+        let mut current = actual_info.extends.as_deref();
+        let mut seen = HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name.to_string()) {
+                break;
+            }
+            if name == expected {
+                return true;
+            }
+            current = self.protocols.get(name).and_then(|p| p.extends.as_deref());
+        }
+
+        let Some(expected_info) = self.protocols.get(expected) else {
+            return false;
+        };
+
+        for (method_name, by_arity) in &expected_info.methods {
+            for (arity, expected_signature) in by_arity {
+                let Some(actual_signature) = self.protocol_method_signature(actual, method_name, *arity) else {
+                    return false;
+                };
+                if !self.callable_signature_compatible(actual_signature, expected_signature) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Check whether one callable signature is compatible with another.
+    pub(super) fn callable_signature_compatible(
+        &self,
+        actual: &CallableSignature,
+        expected: &CallableSignature,
+    ) -> bool {
+        if actual.params.len() != expected.params.len() {
+            return false;
+        }
+
+        for (actual_param, expected_param) in actual.params.iter().zip(expected.params.iter()) {
+            let (Some(actual_param), Some(expected_param)) = (actual_param, expected_param) else {
+                return false;
+            };
+            if !self.simple_type_conforms_to(expected_param, actual_param) {
+                return false;
+            }
+        }
+
+        match (&actual.return_type, &expected.return_type) {
+            (Some(actual_return), Some(expected_return)) => {
+                self.simple_type_conforms_to(actual_return, expected_return)
+            }
+            _ => false,
+        }
+    }
+
+    /// Check whether one simple type conforms to another.
+    pub(super) fn simple_type_conforms_to(&self, actual: &SimpleType, expected: &SimpleType) -> bool {
+        if actual == expected {
+            return true;
+        }
+
+        match (actual, expected) {
+            (_, SimpleType::Named(name)) if name == "Object" => true,
+            (SimpleType::Named(actual_name), SimpleType::Named(expected_name)) => {
+                if self.is_protocol_defined(expected_name) {
+                    if self.is_protocol_defined(actual_name) {
+                        self.protocol_conforms_to_protocol(actual_name, expected_name)
+                    } else {
+                        self.type_implements_protocol(actual_name, expected_name)
+                    }
+                } else if self.is_protocol_defined(actual_name) {
+                    false
+                } else {
+                    self.type_is_subtype_of(actual_name, expected_name)
+                }
+            }
+            (SimpleType::Vector(actual_inner), SimpleType::Vector(expected_inner)) => {
+                self.simple_type_conforms_to(actual_inner, expected_inner)
+            }
+            _ => false,
+        }
     }
 
     /// Return number of type parameters for a type if known.
