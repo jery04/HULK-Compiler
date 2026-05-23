@@ -24,6 +24,7 @@ pub struct Context {
     builtin_types: HashSet<String>,
     builtin_consts: HashSet<String>,
     pub(super) current_type: Option<CurrentTypeInfo>,
+    pub(super) current_method: Option<(String, usize)>,
     pub(super) in_method: bool,
 }
 
@@ -69,6 +70,7 @@ impl Context {
             builtin_types: builtin_types(),
             builtin_consts: builtin_consts(),
             current_type: None,
+            current_method: None,
             in_method: false,
         }
     }
@@ -150,12 +152,17 @@ impl Context {
     }
 
     /// Register a user-defined type with the number of type parameters.
-    pub(super) fn insert_type(&mut self, name: &str, param_count: usize) {
+    pub(super) fn insert_type(
+        &mut self,
+        name: &str,
+        param_count: usize,
+        parent: Option<String>,
+    ) {
         self.types
             .entry(name.to_string())
             .or_insert(TypeInfo {
                 param_count,
-                parent: None,
+                parent,
                 attrs: HashSet::new(),
                 attr_types: HashMap::new(),
                 methods: HashMap::new(),
@@ -539,7 +546,28 @@ impl Context {
         if self.builtin_types.contains(name) {
             return Some(0);
         }
-        self.types.get(name).map(|t| t.param_count)
+
+        let mut current = Some(name);
+        let mut seen = HashSet::new();
+
+        while let Some(type_name) = current {
+            if !seen.insert(type_name.to_string()) {
+                break;
+            }
+
+            let type_info = self.types.get(type_name)?;
+            if type_info.param_count > 0 {
+                return Some(type_info.param_count);
+            }
+
+            if let Some(parent) = type_info.parent.as_deref() {
+                current = Some(parent);
+            } else {
+                return Some(0);
+            }
+        }
+
+        Some(0)
     }
 }
 

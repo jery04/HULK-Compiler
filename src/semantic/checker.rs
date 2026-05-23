@@ -151,7 +151,11 @@ impl SemanticChecker {
             return;
         }
 
-        self.ctx.insert_type(&decl.name, decl.type_params.len());
+        self.ctx.insert_type(
+            &decl.name,
+            decl.type_params.len(),
+            decl.inherits.as_ref().map(|i| i.parent.clone()),
+        );
     }
 
     /// Predeclare a protocol, reporting conflicts with builtin types.
@@ -377,6 +381,8 @@ impl SemanticChecker {
             }
         }
 
+        self.check_inherited_method_overrides(&decl.name, decl.span);
+
         if let Some(current_type) = self.ctx.current_type.as_ref() {
             self.ctx.set_type_members(
                 &decl.name,
@@ -501,6 +507,8 @@ impl SemanticChecker {
 
         let prev_in_method = self.ctx.in_method;
         self.ctx.in_method = true;
+        let prev_method = self.ctx.current_method.clone();
+        self.ctx.current_method = Some((method.name.clone(), method.params.len()));
         self.ctx.push_scope();
         for param in &method.params {
             self.define_var(&param.name, param.span);
@@ -547,7 +555,59 @@ impl SemanticChecker {
             }
         }
         self.ctx.pop_scope();
+        self.ctx.current_method = prev_method;
         self.ctx.in_method = prev_in_method;
+    }
+
+    /// Verify that overridden inherited methods keep exactly the same signature.
+    fn check_inherited_method_overrides(&mut self, type_name: &str, type_span: Span) {
+        let Some(current_type) = self.ctx.current_type.as_ref() else {
+            return;
+        };
+
+        let Some(parent) = current_type.parent.clone() else {
+            return;
+        };
+
+        let methods = current_type.methods.clone();
+
+        for (method_name, by_arity) in methods {
+            for (arity, signature) in by_arity {
+                let Some(expected) = self.ctx.type_method_signature(&parent, &method_name, arity) else {
+                    continue;
+                };
+
+                if !self.signature_is_fully_typed(&signature) || !self.signature_is_fully_typed(expected) {
+                    continue;
+                }
+
+                if !self.callable_signature_exactly_matches(&signature, expected) {
+                    self.report(
+                        type_span,
+                        format!(
+                            "method '{}' in type '{}' must match inherited signature from '{}'",
+                            method_name,
+                            type_name,
+                            parent
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Check whether two callable signatures match exactly.
+    fn callable_signature_exactly_matches(
+        &self,
+        actual: &CallableSignature,
+        expected: &CallableSignature,
+    ) -> bool {
+        actual.params == expected.params && actual.return_type == expected.return_type
+    }
+
+    /// Check whether a callable signature is fully resolved.
+    fn signature_is_fully_typed(&self, signature: &CallableSignature) -> bool {
+        signature.return_type.is_some() && signature.params.iter().all(|param| param.is_some())
     }
 
     /// Check an attribute definition: its declared type and initializer.
@@ -603,13 +663,15 @@ impl SemanticChecker {
                 "parent type '{}' not defined",
                 inherits.parent
             ));
-        } else if let Some(expected) = self.ctx.type_param_count(&inherits.parent) {
-            if expected != inherits.args.len() {
-                self.report(inherits.span, format!(
-                    "parent type '{}' requires {} arguments",
-                    inherits.parent,
-                    expected
-                ));
+        } else if !inherits.args.is_empty() {
+            if let Some(expected) = self.ctx.type_param_count(&inherits.parent) {
+                if expected != inherits.args.len() {
+                    self.report(inherits.span, format!(
+                        "parent type '{}' requires {} arguments",
+                        inherits.parent,
+                        expected
+                    ));
+                }
             }
         }
 
@@ -775,11 +837,25 @@ impl SemanticChecker {
                     self.report(*span, "use of base outside of a method".to_string());
                 } else if let Some(current) = &self.ctx.current_type {
                     if let Some(parent) = &current.parent {
-                        if let Some(expected) = self.ctx.type_param_count(parent) {
-                            if expected != args.len() {
+                        if let Some((method_name, method_arity)) = self.ctx.current_method.clone() {
+                            if let Some(signature) = self
+                                .ctx
+                                .type_method_signature(parent, &method_name, method_arity)
+                                .cloned()
+                            {
+                                self.check_callable_args(
+                                    &method_name,
+                                    args,
+                                    &signature.params,
+                                    "base",
+                                    *span,
+                                );
+                            } else {
                                 self.report(*span, format!(
-                                    "base requires {} arguments",
-                                    expected
+                                    "base method '{}' with arity {} not defined on parent type '{}'",
+                                    method_name,
+                                    method_arity,
+                                    parent
                                 ));
                             }
                         }

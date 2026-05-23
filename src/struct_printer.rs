@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::lexer::lexer::{Span, TokenStream};
 use crate::parser::{Decl, Expr, FuncBody, FuncDecl, Param, Parser, Program, TypeExpr};
 use crate::semantic;
@@ -83,7 +85,54 @@ fn print_span(span: Span, printer: &TreePrinter) {
     printer.line(&format!("span: {}", span));
 }
 
-fn print_type_decl(ty: &crate::parser::TypeDecl, printer: &TreePrinter) {
+fn build_type_decl_map<'a>(program: &'a Program) -> HashMap<String, &'a crate::parser::TypeDecl> {
+    let mut type_decl_map = HashMap::new();
+
+    for decl in &program.decls {
+        if let Decl::Type(ty) = decl {
+            type_decl_map.insert(ty.name.clone(), ty);
+        }
+    }
+
+    type_decl_map
+}
+
+fn type_member_method_names(ty: &crate::parser::TypeDecl) -> Vec<String> {
+    ty.members
+        .iter()
+        .filter_map(|member| match member {
+            crate::parser::TypeMember::Method(method) => Some(method.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn collect_inherited_methods<'a>(
+    ty: &'a crate::parser::TypeDecl,
+    type_decl_map: &HashMap<String, &'a crate::parser::TypeDecl>,
+    visited: &mut HashSet<String>,
+    inherited_methods: &mut Vec<(String, Vec<String>)>,
+) {
+    let Some(inherits) = &ty.inherits else {
+        return;
+    };
+
+    let parent_name = inherits.parent.clone();
+    if !visited.insert(parent_name.clone()) {
+        return;
+    }
+
+    if let Some(parent_ty) = type_decl_map.get(&parent_name) {
+        inherited_methods.push((parent_name.clone(), type_member_method_names(parent_ty)));
+        collect_inherited_methods(parent_ty, type_decl_map, visited, inherited_methods);
+    }
+}
+
+fn print_type_decl(
+    ty: &crate::parser::TypeDecl,
+    type_decl_map: &HashMap<String, &crate::parser::TypeDecl>,
+    printer: &TreePrinter,
+) {
     printer.line("TypeDecl");
 
     let name_printer = printer.child(false);
@@ -161,6 +210,31 @@ fn print_type_decl(ty: &crate::parser::TypeDecl, printer: &TreePrinter) {
                     child.line("Method");
                     let method_printer = child.child(true);
                     print_method_def(method, &method_printer);
+                }
+            }
+        }
+    }
+
+    let inherited_methods_printer = printer.child(false);
+    let mut visited = HashSet::new();
+    let mut inherited_methods = Vec::new();
+    collect_inherited_methods(ty, type_decl_map, &mut visited, &mut inherited_methods);
+    if inherited_methods.is_empty() {
+        inherited_methods_printer.line("inherited_methods: []");
+    } else {
+        inherited_methods_printer.line("inherited_methods");
+        for (idx, (ancestor_name, method_names)) in inherited_methods.iter().enumerate() {
+            let ancestor_printer = inherited_methods_printer.child(idx + 1 == inherited_methods.len());
+            ancestor_printer.line(&format!("ancestor: {}", ancestor_name));
+
+            let methods_printer = ancestor_printer.child(true);
+            if method_names.is_empty() {
+                methods_printer.line("methods: []");
+            } else {
+                methods_printer.line("methods");
+                for (method_idx, method_name) in method_names.iter().enumerate() {
+                    let method_printer = methods_printer.child(method_idx + 1 == method_names.len());
+                    method_printer.line(method_name);
                 }
             }
         }
@@ -416,7 +490,11 @@ fn print_func_decl(func: &FuncDecl, printer: &TreePrinter) {
     print_span(func.span, &span_printer);
 }
 
-fn print_decl(decl: &Decl, printer: &TreePrinter) {
+fn print_decl(
+    decl: &Decl,
+    type_decl_map: &HashMap<String, &crate::parser::TypeDecl>,
+    printer: &TreePrinter,
+) {
     match decl {
         Decl::Function(func) => {
             printer.line("Decl::Function");
@@ -426,7 +504,7 @@ fn print_decl(decl: &Decl, printer: &TreePrinter) {
         Decl::Type(ty) => {
             printer.line("Decl::Type");
             let child = printer.child(true);
-            print_type_decl(ty, &child);
+            print_type_decl(ty, type_decl_map, &child);
         }
         Decl::Protocol(protocol) => {
             printer.line("Decl::Protocol");
@@ -444,6 +522,7 @@ fn print_decl(decl: &Decl, printer: &TreePrinter) {
 fn print_program(program: &Program) {
     let printer = TreePrinter::root();
     printer.line("Program");
+    let type_decl_map = build_type_decl_map(program);
 
     let decls_printer = printer.child(false);
     if program.decls.is_empty() {
@@ -452,7 +531,7 @@ fn print_program(program: &Program) {
         decls_printer.line("decls");
         for (idx, decl) in program.decls.iter().enumerate() {
             let child = decls_printer.child(idx + 1 == program.decls.len());
-            print_decl(decl, &child);
+            print_decl(decl, &type_decl_map, &child);
         }
     }
 

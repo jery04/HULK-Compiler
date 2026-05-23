@@ -11,6 +11,31 @@ use struct_printer::test_program; // import test_program directly
 fn main() {
 
     test_program(true, r#"
+
+        type A {
+            x = 0;
+
+            get_x() => self.x;
+        }
+
+        type Person(firstname, lastname) inherits A {
+            firstname = firstname;
+            lastname = lastname;
+
+            num(a: Number): Number => a+1;
+            hole() => "This is a hole in the Person type";
+            name(a: String, b: Number): String => self.firstname @@ self.lastname;
+        }
+
+        type Knight inherits Person {
+            name(a: String, b: Number): String => "Sir" @@ base();
+        }
+
+        let p = new Knight("Phil", "Collins") in
+            print(p.get_x()); 
+    "#);
+
+    test_program(false, r#"
         protocol Greetable {
             greet() : String;
         }

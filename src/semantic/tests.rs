@@ -335,6 +335,24 @@ fn type_inheritance_reports_wrong_parent_arity() {
 }
 
 #[test]
+fn type_inheritance_inherits_parent_constructor_arity_by_default() {
+    let errors = semantic_errors(r#"
+        type Person(name, age) {
+            name = name;
+            age = age;
+        }
+
+        type Knight inherits Person {
+            title = "Sir";
+        }
+
+        let p = new Knight("Phil", "Collins") in p;
+    "#);
+
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
 fn function_parameter_reports_undefined_type_annotation() {
     let errors = semantic_errors(r#"
         function f(x: TipoNoDefinido) => x;
@@ -666,6 +684,40 @@ fn inherited_method_is_found_on_subtype_instances() {
     "#);
 
     assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn inherited_method_override_with_same_signature_is_allowed() {
+    let errors = semantic_errors(r#"
+        type A {
+            m(x: Number): Number => x + 1;
+        }
+
+        type B inherits A {
+            m(x: Number): Number => x + 2;
+        }
+
+        print(0);
+    "#);
+
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn inherited_method_override_with_different_signature_reports_error() {
+    let errors = semantic_errors(r#"
+        type A {
+            m(x: Number): Number => x + 1;
+        }
+
+        type B inherits A {
+            m(x: String): String => x;
+        }
+
+        print(0);
+    "#);
+
+    assert_has_error(&errors, "must match inherited signature");
 }
 
 #[test]
@@ -1123,6 +1175,67 @@ fn base_valid_calls_parent_method() {
     "#);
 
     assert!(errors.is_empty(), "expected no semantic errors, got: {:?}", errors);
+}
+
+#[test]
+fn base_uses_parent_method_not_parent_constructor_arity() {
+    let errors = semantic_errors(r#"
+    type Person(firstname, lastname) {
+        firstname = firstname;
+        lastname = lastname;
+
+        name() => self.firstname @@ self.lastname;
+    }
+
+    type Knight inherits Person {
+        name() => "Sir" @@ base();
+    }
+
+    let p = new Knight("Phil", "Collins") in p.name();
+    "#);
+
+    assert!(errors.is_empty(), "expected no semantic errors, got: {:?}", errors);
+}
+
+#[test]
+fn base_valid_in_overridden_method_with_parameters() {
+    let errors = semantic_errors(r#"
+    type Person(firstname, lastname) {
+        firstname = firstname;
+        lastname = lastname;
+
+        name(a: String, b: Number): String => self.firstname @@ self.lastname;
+    }
+
+    type Knight inherits Person {
+        name(a: String, b: Number): String => "Sir" @@ base();
+    }
+
+    let p = new Knight("Phil", "Collins") in p.name("x", 1);
+    "#);
+
+    assert!(errors.is_empty(), "expected no semantic errors, got: {:?}", errors);
+}
+
+#[test]
+fn base_valid_in_overridden_method_with_diff_parameters() {
+    let errors = semantic_errors(r#"
+    type Person(firstname, lastname) {
+        firstname = firstname;
+        lastname = lastname;
+
+        name(a: String, b: Number): String => self.firstname @@ self.lastname;
+    }
+
+    type Knight inherits Person {
+        name(a: String, b: Boolean): String => "Sir" @@ base();
+    }
+
+    let p = new Knight("Phil", "Collins") in p.name("x", 1);
+    "#);
+
+    assert_has_error(&errors, "method 'name' in type 'Knight' must match inherited signature from 'Person'");
+    assert_has_error(&errors, "method 'name' argument 2 expects Boolean, found Number");
 }
 
 #[test]
