@@ -25,7 +25,7 @@ fn main() {
         print(42);
     "#);
 
-    test_program(false, r#"
+    test_program(true, r#"
 
         type A {
             x = 0;

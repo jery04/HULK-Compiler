@@ -180,7 +180,7 @@ impl SemanticChecker {
             return;
         }
 
-        self.ctx.insert_protocol(&decl.name);
+        self.ctx.insert_protocol(&decl.name, decl.extends.clone());
     }
 
     /// Predeclare a macro name and arity; report conflicts.
@@ -414,6 +414,11 @@ impl SemanticChecker {
                 self.report(decl.span, format!(
                     "parent protocol '{}' not defined",
                     parent
+                ));
+            } else if self.protocol_inheritance_has_cycle(&decl.name, parent) {
+                self.report(decl.span, format!(
+                    "protocol '{}' has cyclic inheritance",
+                    decl.name
                 ));
             }
         }
@@ -663,6 +668,11 @@ impl SemanticChecker {
                 "parent type '{}' not defined",
                 inherits.parent
             ));
+        } else if self.type_inheritance_has_cycle(type_name, &inherits.parent) {
+            self.report(inherits.span, format!(
+                "type '{}' has cyclic inheritance",
+                type_name
+            ));
         } else if !inherits.args.is_empty() {
             if let Some(expected) = self.ctx.type_param_count(&inherits.parent) {
                 if expected != inherits.args.len() {
@@ -678,6 +688,36 @@ impl SemanticChecker {
         for arg in &inherits.args {
             self.check_expr(arg);
         }
+    }
+
+    /// Detect whether a type would participate in an inheritance cycle.
+    fn type_inheritance_has_cycle(&self, type_name: &str, parent: &str) -> bool {
+        let mut current = Some(parent);
+        let mut seen = HashSet::new();
+
+        while let Some(name) = current {
+            if name == type_name || !seen.insert(name.to_string()) {
+                return true;
+            }
+            current = self.ctx.type_parent(name);
+        }
+
+        false
+    }
+
+    /// Detect whether a protocol would participate in an inheritance cycle.
+    fn protocol_inheritance_has_cycle(&self, protocol_name: &str, parent: &str) -> bool {
+        let mut current = Some(parent);
+        let mut seen = HashSet::new();
+
+        while let Some(name) = current {
+            if name == protocol_name || !seen.insert(name.to_string()) {
+                return true;
+            }
+            current = self.ctx.protocol_parent(name);
+        }
+
+        false
     }
 
     /// Validate a parameter: uniqueness and type correctness.

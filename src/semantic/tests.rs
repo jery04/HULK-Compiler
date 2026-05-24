@@ -353,6 +353,24 @@ fn type_inheritance_inherits_parent_constructor_arity_by_default() {
 }
 
 #[test]
+fn type_inheritance_reports_cyclic_inheritance() {
+    let errors = semantic_errors(r#"
+        type A inherits B {
+            value = 1;
+        }
+
+        type B inherits A {
+            value = 2;
+        }
+
+        0;
+    "#);
+
+    assert_has_error(&errors, "type 'A' has cyclic inheritance");
+    assert_has_error(&errors, "type 'B' has cyclic inheritance");
+}
+
+#[test]
 fn function_parameter_reports_undefined_type_annotation() {
     let errors = semantic_errors(r#"
         function f(x: TipoNoDefinido) => x;
@@ -443,6 +461,24 @@ fn protocol_extends_reports_error_when_parent_is_a_type() {
     "#);
 
     assert_has_error(&errors, "parent type 'Base' cannot be extended by a protocol");
+}
+
+#[test]
+fn protocol_extends_reports_cyclic_inheritance() {
+    let errors = semantic_errors(r#"
+        protocol A extends B {
+            m(): Number;
+        }
+
+        protocol B extends A {
+            n(): Number;
+        }
+
+        0;
+    "#);
+
+    assert_has_error(&errors, "protocol 'A' has cyclic inheritance");
+    assert_has_error(&errors, "protocol 'B' has cyclic inheritance");
 }
 
 #[test]

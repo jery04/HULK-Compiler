@@ -169,6 +169,11 @@ impl Context {
             });
     }
 
+    /// Get the direct parent of a type if it exists.
+    pub(super) fn type_parent(&self, name: &str) -> Option<&str> {
+        self.types.get(name)?.parent.as_deref()
+    }
+
     /// Set recorded attributes and methods for a previously registered type.
     pub(super) fn set_type_members(
         &mut self,
@@ -261,11 +266,16 @@ impl Context {
     }
 
     /// Register a protocol name.
-    pub(super) fn insert_protocol(&mut self, name: &str) {
+    pub(super) fn insert_protocol(&mut self, name: &str, extends: Option<String>) {
         self.protocols.entry(name.to_string()).or_insert(ProtocolInfo {
-            extends: None,
+            extends,
             methods: HashMap::new(),
         });
+    }
+
+    /// Get the direct parent protocol if it exists.
+    pub(super) fn protocol_parent(&self, name: &str) -> Option<&str> {
+        self.protocols.get(name)?.extends.as_deref()
     }
 
     /// Store the methods and parent of a protocol.
