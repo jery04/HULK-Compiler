@@ -248,7 +248,6 @@ impl<'src> Parser<'src> {
         let left = self.parse_or()?;
 
         if self.matches(&Token::ColonAssign) {
-            // Check if left is a valid assignment target (Ident, FieldAccess)
             match &left {
                 Expr::Ident { .. } | Expr::FieldAccess { .. } => {
                     let value = self.parse_assign()?;
@@ -710,88 +709,10 @@ impl<'src> Parser<'src> {
             }
 
             Token::LParen => {
-                // Possible lambda or grouped expression. We do a safe lookahead
-                // using TokenStream::peek_n to detect the pattern:
-                //   ( params ) -> Type => body
-                //   ( params ) => body
-                let lparen_span = self.current.span;
-                // Look ahead to find matching ')' index and token after it.
-                let mut idx = 1usize;
-                let mut depth = 0i32;
-                let mut found_rparen: Option<usize> = None;
-                while let Some(tok) = self.tokens.peek_n(idx) {
-                    match tok.token {
-                        Token::LParen => depth += 1,
-                        Token::RParen => {
-                            if depth == 0 {
-                                found_rparen = Some(idx);
-                                break;
-                            } else {
-                                depth -= 1;
-                            }
-                        }
-                        Token::Eof => break,
-                        _ => {}
-                    }
-                    idx += 1;
-                }
-
-                if let Some(ridx) = found_rparen {
-                    if let Some(after) = self.tokens.peek_n(ridx + 1) {
-                        match after.token {
-                            Token::ThinArrow | Token::Arrow => {
-                                // It's a lambda: consume '(' and parse param list
-                                self.advance(); // consume '('
-                                let mut params = Vec::new();
-                                if !self.check(&Token::RParen) {
-                                    params.push(self.parse_param()?);
-                                    while self.matches(&Token::Comma) {
-                                        params.push(self.parse_param()?);
-                                    }
-                                }
-                                let _rparen = self.expect(&Token::RParen, "expected ')' after parameter list")?;
-
-                                // Optional return type after '->'
-                                let return_type = if self.matches(&Token::ThinArrow) {
-                                    let (t, _) = self.parse_type_expr_or_error();
-                                    Some(t)
-                                } else {
-                                    None
-                                };
-
-                                // Body must follow '=>' (Arrow)
-                                if self.matches(&Token::Arrow) {
-                                    // Inline expression body
-                                    let inline_expr = self.parse_expr()?;
-                                    let body = FuncBody::Inline(Box::new(inline_expr));
-                                    let body_end = match &body {
-                                        FuncBody::Inline(e) => e.span().end,
-                                        FuncBody::Block(e) => e.span().end,
-                                    };
-                                    let span = Span { start: lparen_span.start, end: body_end };
-                                    return Some(Expr::Lambda { params, return_type, body, span });
-                                } else if self.check(&Token::LBrace) {
-                                    let block = self.parse_block()?;
-                                    let body = FuncBody::Block(Box::new(block));
-                                    let body_end = match &body {
-                                        FuncBody::Inline(e) => e.span().end,
-                                        FuncBody::Block(e) => e.span().end,
-                                    };
-                                    let span = Span { start: lparen_span.start, end: body_end };
-                                    return Some(Expr::Lambda { params, return_type, body, span });
-                                } else {
-                                    self.error("expected '=>' or '{' after lambda header");
-                                    return Some(Expr::Error { span: lparen_span });
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-
-                // Fallback: grouped expression or parenthesized sequence.
+                // Parenthesized expression or parenthesized sequence.
                 // Parentheses can wrap a single expression, or a semicolon-separated
                 // sequence that behaves like a block body: `(e1; e2; e3;)`.
+                let lparen_span = self.current.span;
                 self.advance(); // consume '('
 
                 if self.check(&Token::RParen) {
@@ -829,7 +750,6 @@ impl<'src> Parser<'src> {
                 } else {
                     Some(Expr::Block { exprs, span })
                 }
-                
             }
 
             Token::LBrace => {
@@ -1194,7 +1114,6 @@ impl<'src> Parser<'src> {
             Expr::Let { bindings, body, .. } => Expr::Let { bindings, body, span: new_span },
             Expr::Assign { target, value, .. } => Expr::Assign { target, value, span: new_span },
             Expr::Block { exprs, .. } => Expr::Block { exprs, span: new_span },
-            Expr::Lambda { params, return_type, body, .. } => Expr::Lambda { params, return_type, body, span: new_span },
             Expr::Error { .. } => Expr::Error { span: new_span },
         }
     }
@@ -1718,7 +1637,6 @@ impl HasSpan for Expr {
             Expr::Let { span, .. } => *span,
             Expr::Assign { span, .. } => *span,
             Expr::Block { span, .. } => *span,
-            Expr::Lambda { span, .. } => *span,
             Expr::Error { span } => *span,
         }
     }

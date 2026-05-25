@@ -24,6 +24,17 @@ fn parse_source_with_errors(source: &str) -> (Option<Program>, Vec<String>) {
     (program, parser.errors)
 }
 
+fn assert_errors_contain(errors: &[String], expected: &[&str]) {
+    for needle in expected {
+        assert!(
+            errors.iter().any(|error| error.contains(needle)),
+            "Missing expected parse error containing {:?}. Got: {:?}",
+            needle,
+            errors
+        );
+    }
+}
+
 // ============================================
 // ASSOCIATIVITY TESTS
 // ============================================
@@ -420,4 +431,350 @@ fn test_builtin_functions() {
     let source = "sin(1) + cos(2) + sqrt(3) + exp(4) + log(5)";
     let result = parse_source(source);
     assert!(result.is_some(), "Builtin functions should parse");
+}
+
+// ============================================
+// PARSER ERROR COVERAGE TESTS
+// ============================================
+
+#[test]
+fn test_missing_global_expression_reports_error() {
+    let (_, errors) = parse_source_with_errors("");
+
+    assert_errors_contain(&errors, &[
+        "expected a global expression but found end of file",
+    ]);
+}
+
+#[test]
+fn test_expression_errors_cover_multiple_failures() {
+    let source = r#"
+        {
+            ;
+            1 := 2;
+            x.;
+            new 1;
+            ();
+            foo(1;
+            1 is ();
+            1 2
+        "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "expected expression",
+        "expected type name after 'new'",
+        "expected ')' to close argument list",
+        "expected type expression",
+        "expected ';' or '}' after block expression",
+        "expected '}' to close block",
+    ]);
+}
+
+#[test]
+fn test_control_flow_errors_cover_multiple_failures() {
+    let source = r#"
+        {
+            if 1 2 else 3;
+            if (1 2) 3 else 4;
+            if (1) 2 elif 3 4 else 5;
+            if (1) 2 elif (3 4) 5 else 6;
+            if (1) 2;
+            while 1 2;
+            while (1 2) 3;
+            for x in xs 1;
+            for (x xs) 1;
+            for (x in xs 1);
+        }
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "expected '(' after 'if'",
+        "expected ')' after if condition",
+        "expected ')' after elif condition",
+        "expected 'else' clause on if expression",
+        "expected '(' after 'for'",
+        "expected 'in' in for loop header",
+        "expected ')' after for loop header",
+    ]);
+}
+
+#[test]
+fn test_let_errors_cover_multiple_failures() {
+    let source = r#"
+        {
+            let = 1 in 2;
+            let x 1 in 2;
+            let _y = 1 in _y;
+            let a = 1, b = 2 3;
+        }
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "expected identifier in let binding",
+        "expected '=' in let binding",
+        "expected 'in' after let bindings",
+    ]);
+}
+
+#[test]
+fn test_function_errors_cover_multiple_failures() {
+    let source = r#"
+        function (x) => 1;
+        function bad x => 1;
+        function missing_paren(x => 1;
+        function bad_internal(_x) => _x;
+        function worse(1) x;
+        function inline_missing_semicolon() => 1
+        1 2
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "expected function name",
+        "expected '(' after function name",
+        "expected parameter name",
+        "expected '=>' or '{' for function body",
+        "expected ';' after inline function body",
+    ]);
+}
+
+#[test]
+fn test_type_errors_cover_multiple_failures() {
+    let source = r#"
+        type 1 { }
+        type V(x { }
+        type T extends P { }
+        type U inherits 1 { }
+        type NoBody x;
+        type W {
+            1;
+            p(x: Number {
+            m() x;
+            k() => 1
+            n;
+            a: Number = 1
+        }
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "expected type name",
+        "expected ')' after type parameters",
+        "expected 'inherits' after type name",
+        "expected parent type name",
+        "expected '{' for type body",
+        "expected member name",
+        "expected ')' after method parameters",
+        "expected '=>' or '{' for method body",
+        "expected ';' after method inline body",
+        "expected ';' after attribute initializer",
+    ]);
+}
+
+#[test]
+fn test_protocol_errors_cover_multiple_failures() {
+    let source = r#"
+        protocol 1 { }
+        protocol P inherits Q { }
+        protocol R extends 1 { }
+        protocol NoBody x;
+        protocol T {
+            1: Number;
+            m(1: Number): Number;
+            bad: Number;
+            q(x: Number: Number;
+            r(x) Number;
+            s(x): Number
+        
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "expected protocol name",
+        "expected 'extends' after protocol name",
+        "expected parent protocol name",
+        "expected '{' for protocol body",
+        "expected method name in protocol",
+        "expected '(' after method name in protocol",
+        "expected parameter name in protocol method",
+        "expected ':' for protocol method return type",
+        "expected ';' after protocol method signature",
+        "expected '}' after protocol body",
+    ]);
+}
+
+#[test]
+fn test_parenthesized_arrow_is_not_special_cased() {
+    let source = "(x) => x";
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["unexpected tokens after global expression"]);
+    assert_eq!(errors.len(), 1, "Expected a single generic parse error, got: {:?}", errors);
+}
+
+#[test]
+fn test_trailing_tokens_after_global_expression() {
+    let (_, errors) = parse_source_with_errors("1 2");
+
+    assert_errors_contain(&errors, &["unexpected tokens after global expression"]);
+}
+
+#[test]
+fn test_missing_field_name_after_dot_reports_error() {
+    let source = r#"
+        {
+            x.;
+        }
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["expected field name after '.'"]);
+}
+
+#[test]
+fn test_empty_parentheses_reports_error() {
+    let (_, errors) = parse_source_with_errors("()");
+
+    assert_errors_contain(&errors, &["expected expression inside parentheses"]);
+}
+
+#[test]
+fn test_missing_type_body_closing_brace_reports_error() {
+    let source = "type T { 1;";
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["expected '}' after type body"]);
+}
+
+#[test]
+fn test_remaining_expression_and_loop_errors_are_reported() {
+    let source = r#"
+        {
+            (1 + 2) := 3;
+            while (1 2) 3;
+            for (_item in items) 1;
+            let _tmp = 1 in _tmp;
+        }
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "assignment target must be an identifier, field access (e.g., x.field), or index (e.g., x[i])",
+        "expected identifier in for loop header",
+        "internal identifiers not allowed in user code",
+    ]);
+}
+
+#[test]
+fn test_remaining_declaration_errors_are_reported() {
+    let source = r#"
+        function bad(_x => _x;
+        function inline_block() => { 1; };
+        function vec_param(x: Number[) => x;
+
+        type T {
+            broken: Number 1;
+        }
+
+        1
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "internal identifiers not allowed in user code",
+        "expected ')' after parameter list",
+        "inline function body cannot be a block; use '{...}' without '=>' or an expression after '=>'",
+        "unexpected ';' after function block body",
+        "expected '=' in attribute definition",
+        "expected ']' in type vector",
+    ]);
+}
+
+#[test]
+fn test_while_missing_closing_paren_reports_error() {
+    let source = "while (1 2) 3";
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["expected ')' after while condition"]);
+}
+
+#[test]
+fn test_while_missing_opening_paren_reports_error() {
+    let source = "while 1 2";
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["expected '(' after 'while'"]);
+}
+
+#[test]
+fn test_parenthesized_expression_missing_closing_paren_reports_error() {
+    let source = "(1";
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["expected ')' after expression"]);
+}
+
+#[test]
+fn test_elif_missing_opening_paren_reports_error() {
+    let source = "if (1) 2 elif 3 else 4";
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["expected '(' after 'elif'"]);
+}
+
+#[test]
+fn test_type_member_without_separator_reports_error() {
+    let source = r#"
+        type U {
+            orphan;
+        }
+        1
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["expected ':' or '=' or '(' after member name"]);
+}
+
+#[test]
+fn test_inline_method_block_body_reports_errors() {
+    let source = r#"
+        type U {
+            m() => { 1; };
+        }
+        1
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &[
+        "inline method body cannot be a block; use '{...}' without '=>' or an expression after '=>'",
+        "unexpected ';' after method block body",
+    ]);
+}
+
+#[test]
+fn test_protocol_method_missing_closing_paren_reports_error() {
+    let source = r#"
+        protocol P {
+            q(x: Number: Number;
+        }
+        1
+    "#;
+
+    let (_, errors) = parse_source_with_errors(source);
+
+    assert_errors_contain(&errors, &["expected ')' after protocol method parameters"]);
 }

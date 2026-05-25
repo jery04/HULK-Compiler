@@ -268,14 +268,6 @@ pub enum Expr {
         span:  Span,
     },
 
-    /// Anonymous function / lambda: `(params) -> ReturnType => body` or `(params) => body`
-    Lambda {
-        params: Vec<Param>,
-        return_type: Option<TypeExpr>,
-        body: FuncBody,
-        span: Span,
-    },
-
     /// Error placeholder used for recovery after a parse error.
     Error {
         span: Span,

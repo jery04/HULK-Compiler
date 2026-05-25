@@ -1129,21 +1129,6 @@ impl SemanticChecker {
                 }
                 self.ctx.pop_scope();
             }
-            Expr::Lambda { params, return_type, body, .. } => {
-                let mut seen = HashSet::new();
-                for param in params {
-                    self.check_param(param, &mut seen);
-                }
-                if let Some(ty) = return_type {
-                    self.check_type_expr(ty, expr_span(expr));
-                }
-                self.ctx.push_scope();
-                for param in params {
-                    self.define_var(&param.name, param.span);
-                }
-                self.check_func_body(body);
-                self.ctx.pop_scope();
-            }
             Expr::Error { .. } => {}
         }
     }
@@ -1843,27 +1828,6 @@ impl SemanticChecker {
                 }
                 result
             }
-            Expr::Lambda { params, return_type, body, .. } => {
-                let mut lambda_ctx = ctx.clone();
-                lambda_ctx.push_scope();
-                for param in params {
-                    lambda_ctx.define_var(&param.name);
-                    if let Some(ty) = &param.ty {
-                        if let Some(simple_ty) = simple_type_from_type_expr(ty) {
-                            lambda_ctx.set_var_type(&param.name, simple_ty);
-                        }
-                    }
-                }
-                if let Some(ty) = return_type {
-                    simple_type_from_type_expr(ty)
-                } else {
-                    match body {
-                        FuncBody::Inline(expr) | FuncBody::Block(expr) => {
-                            self.infer_expr_with_scopes(expr, &mut lambda_ctx)
-                        }
-                    }
-                }
-            }
             Expr::Error { .. } => None,
             Expr::IsType { .. } => Some(SimpleType::Boolean),
             Expr::Base { .. } => self.infer_simple_type(expr),
@@ -1972,7 +1936,6 @@ fn expr_span(expr: &Expr) -> Span {
         Expr::Let { span, .. } => *span,
         Expr::Assign { span, .. } => *span,
         Expr::Block { span, .. } => *span,
-        Expr::Lambda { span, .. } => *span,
         Expr::Error { span } => *span,
     }
 }

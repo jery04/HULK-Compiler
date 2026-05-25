@@ -878,43 +878,6 @@ fn print_expr(expr: &Expr, printer: &TreePrinter) {
             let span_printer = printer.child(true);
             print_span(*span, &span_printer);
         }
-        Expr::Lambda {
-            params,
-            return_type,
-            body,
-            span,
-        } => {
-            printer.line("Lambda");
-
-            let params_printer = printer.child(false);
-            if params.is_empty() {
-                params_printer.line("params: []");
-            } else {
-                params_printer.line("params");
-                for (idx, param) in params.iter().enumerate() {
-                    let child = params_printer.child(idx + 1 == params.len());
-                    print_param(param, &child);
-                }
-            }
-
-            let return_printer = printer.child(false);
-            match return_type {
-                Some(ty) => {
-                    return_printer.line("return_type");
-                    let child = return_printer.child(true);
-                    print_type_expr(ty, &child);
-                }
-                None => return_printer.line("return_type: None"),
-            }
-
-            let body_printer = printer.child(false);
-            body_printer.line("body");
-            let body_child = body_printer.child(true);
-            print_func_body(body, &body_child);
-
-            let span_printer = printer.child(true);
-            print_span(*span, &span_printer);
-        }
         Expr::Error { span } => {
             printer.line("ErrorExpr");
             let span_printer = printer.child(true);
