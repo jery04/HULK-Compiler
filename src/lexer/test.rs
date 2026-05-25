@@ -17,6 +17,11 @@ fn errors(src: &str) -> Vec<LexError> {
     errs
 }
 
+/// Extrae solo los slices de los errores léxicos.
+fn error_slices(src: &str) -> Vec<String> {
+    errors(src).into_iter().map(|err| err.slice).collect()
+}
+
 /// Extrae tokens incluyendo EOF.
 fn tokens_with_eof(src: &str) -> Vec<Token> {
     let (toks, _) = TokenStream::tokenize_all(src);
@@ -207,17 +212,32 @@ fn string_escape_newline_tab() {
 }
 
 #[test]
-fn string_unclosed_gives_error() {
-    // string sin cerrar en la misma línea → error léxico
-    let errs = errors("\"hola mundo");
-    assert!(!errs.is_empty());
+fn invalid_characters_are_reported_in_order() {
+    // Tres caracteres inválidos en una sola pasada: '#', '?', '$'.
+    let src = "let #x = ?42; $foo";
+
+    assert_eq!(error_slices(src), vec![String::from("#"), String::from("?"), String::from("$")]);
+    assert_eq!(
+        tokens(src),
+        vec![
+            Token::Let,
+            Token::Ident("x".into()),
+            Token::Eq,
+            Token::Number("42".into()),
+            Token::Semicolon,
+            Token::Ident("foo".into()),
+        ]
+    );
 }
 
 #[test]
-fn string_no_multiline() {
-    // salto de línea dentro del string → error, no token válido
-    let errs = errors("\"hola\nmundo\"");
-    assert!(!errs.is_empty());
+fn unterminated_string_reports_the_full_prefix() {
+    // El lexer consume la cadena mal formada como un único error.
+    let errs = errors("\"hola");
+
+    assert_eq!(errs.len(), 1);
+    assert_eq!(errs[0].slice, "\"hola");
+    assert_eq!(errs[0].span.start, Pos { line: 1, col: 1 });
 }
 
 // ── operadores multi-carácter ─────────────────────────────────────────────
@@ -277,27 +297,14 @@ fn span_line_col() {
 // ── errores sin panic ─────────────────────────────────────────────────────
 
 #[test]
-fn error_no_panic() {
-    let errs = errors("let x = #42;");
-    assert!(!errs.is_empty());
-    assert!(errs[0].slice.contains('#'));
-}
+fn error_positions_are_kept_for_each_failure() {
+    let errs = errors("let\n x = #;\n ?");
 
-#[test]
-fn error_has_position() {
-    let errs = errors("let\n x = #;");
-    assert_eq!(errs[0].span.start.line, 2);
-}
-
-#[test]
-fn errors_dont_stop_tokenization() {
-    // '#' es inválido pero los tokens siguientes deben seguir apareciendo
-    let (toks, errs) = TokenStream::tokenize_all("let #x = 42;");
-    assert!(!errs.is_empty());
-    // debe haber tokenizado "let", "x", "=", "42", ";"
-    let token_kinds: Vec<_> = toks.iter().map(|t| &t.token).collect();
-    assert!(token_kinds.contains(&&Token::Let));
-    assert!(token_kinds.contains(&&Token::Ident("x".into())));
+    assert_eq!(errs.len(), 2);
+    assert_eq!(errs[0].slice, "#");
+    assert_eq!(errs[0].span.start, Pos { line: 2, col: 6 });
+    assert_eq!(errs[1].slice, "?");
+    assert_eq!(errs[1].span.start, Pos { line: 3, col: 2 });
 }
 
 // ── programas completos ───────────────────────────────────────────────────
