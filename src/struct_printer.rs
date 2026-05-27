@@ -12,6 +12,7 @@ struct TreePrinter {
 }
 
 impl TreePrinter {
+    /// Create a root printer for a new tree.
     fn root() -> Self {
         Self {
             prefix: String::new(),
@@ -20,6 +21,7 @@ impl TreePrinter {
         }
     }
 
+    /// Create a child printer that extends the current branch.
     fn child(&self, is_last: bool) -> Self {
         let mut prefix = self.prefix.clone();
         if self.depth > 0 {
@@ -36,6 +38,7 @@ impl TreePrinter {
         }
     }
 
+    /// Print one labeled tree line.
     fn line(&self, label: &str) {
         if self.depth == 0 {
             println!("{}", label);
@@ -46,6 +49,7 @@ impl TreePrinter {
     }
 }
 
+    /// Print one labeled tree line.
 fn print_type_expr(ty: &TypeExpr, printer: &TreePrinter) {
     match ty {
         TypeExpr::Named(name) => printer.line(&format!("Type::Named({})", name)),
@@ -62,10 +66,12 @@ fn print_type_expr(ty: &TypeExpr, printer: &TreePrinter) {
     }
 }
 
+    /// Print a span in tree form.
 fn print_span(span: Span, printer: &TreePrinter) {
     printer.line(&format!("span: {}", span));
 }
 
+    /// Collect type declarations by name.
 fn build_type_decl_map<'a>(program: &'a Program) -> HashMap<String, &'a crate::parser::TypeDecl> {
     let mut type_decl_map = HashMap::new();
 
@@ -78,6 +84,7 @@ fn build_type_decl_map<'a>(program: &'a Program) -> HashMap<String, &'a crate::p
     type_decl_map
 }
 
+    /// Collect protocol declarations by name.
 fn build_protocol_decl_map<'a>(
     program: &'a Program,
 ) -> HashMap<String, &'a crate::parser::ProtocolDecl> {
@@ -92,6 +99,7 @@ fn build_protocol_decl_map<'a>(
     protocol_decl_map
 }
 
+    /// List the method names declared on a type.
 fn type_member_method_names(ty: &crate::parser::TypeDecl) -> Vec<String> {
     ty.members
         .iter()
@@ -102,6 +110,7 @@ fn type_member_method_names(ty: &crate::parser::TypeDecl) -> Vec<String> {
         .collect()
 }
 
+    /// List the method names declared on a protocol.
 fn protocol_method_names(protocol: &crate::parser::ProtocolDecl) -> Vec<String> {
     protocol
         .methods
@@ -110,6 +119,7 @@ fn protocol_method_names(protocol: &crate::parser::ProtocolDecl) -> Vec<String> 
         .collect()
 }
 
+    /// Collect inherited methods for a type chain.
 fn collect_inherited_methods<'a>(
     ty: &'a crate::parser::TypeDecl,
     type_decl_map: &HashMap<String, &'a crate::parser::TypeDecl>,
@@ -131,6 +141,7 @@ fn collect_inherited_methods<'a>(
     }
 }
 
+    /// Collect inherited methods for a protocol chain.
 fn collect_inherited_protocol_methods<'a>(
     protocol: &'a crate::parser::ProtocolDecl,
     protocol_decl_map: &HashMap<String, &'a crate::parser::ProtocolDecl>,
@@ -156,6 +167,7 @@ fn collect_inherited_protocol_methods<'a>(
     }
 }
 
+    /// Print one type declaration.
 fn print_type_decl(
     ty: &crate::parser::TypeDecl,
     type_decl_map: &HashMap<String, &crate::parser::TypeDecl>,
@@ -272,6 +284,7 @@ fn print_type_decl(
     print_span(ty.span, &span_printer);
 }
 
+    /// Print one method declaration.
 fn print_method_def(m: &crate::parser::MethodDef, printer: &TreePrinter) {
     printer.line("MethodDef");
 
@@ -287,6 +300,7 @@ fn print_method_def(m: &crate::parser::MethodDef, printer: &TreePrinter) {
             let child = params_printer.child(idx + 1 == m.params.len());
             print_param(param, &child);
         }
+            /// Print one protocol declaration.
     }
 
     let return_printer = printer.child(false);
@@ -407,6 +421,7 @@ fn print_protocol_decl(
     print_span(p.span, &span_printer);
 }
 
+    /// Print one parameter node.
 fn print_param(param: &Param, printer: &TreePrinter) {
     printer.line("Param");
 
@@ -427,6 +442,7 @@ fn print_param(param: &Param, printer: &TreePrinter) {
     print_span(param.span, &span_printer);
 }
 
+    /// Print a function body.
 fn print_func_body(body: &FuncBody, printer: &TreePrinter) {
     match body {
         FuncBody::Inline(expr) => {
@@ -442,6 +458,7 @@ fn print_func_body(body: &FuncBody, printer: &TreePrinter) {
     }
 }
 
+    /// Print one function declaration.
 fn print_func_decl(func: &FuncDecl, printer: &TreePrinter) {
     printer.line("FuncDecl");
 
@@ -478,6 +495,7 @@ fn print_func_decl(func: &FuncDecl, printer: &TreePrinter) {
     print_span(func.span, &span_printer);
 }
 
+    /// Print any declaration node.
 fn print_decl(
     decl: &Decl,
     type_decl_map: &HashMap<String, &crate::parser::TypeDecl>,
@@ -503,6 +521,7 @@ fn print_decl(
     }
 }
 
+    /// Print a full program tree.
 fn print_program(program: &Program) {
     let printer = TreePrinter::root();
     printer.line("Program");
@@ -529,6 +548,7 @@ fn print_program(program: &Program) {
     print_span(program.span, &span_printer);
 }
 
+    /// Print one expression node.
 fn print_expr(expr: &Expr, printer: &TreePrinter) {
     match expr {
         Expr::Number { value, span } => {
@@ -886,6 +906,7 @@ fn print_expr(expr: &Expr, printer: &TreePrinter) {
     }
 }
 
+/// Print a single expression test trace.
 pub fn test_expression(src: &str) {
     println!("\n=== Test: Expression ===");
     println!("Source: {}", src);
@@ -928,6 +949,7 @@ pub fn test_expression(src: &str) {
     }
 }
 
+/// Print a full program test trace.
 pub fn test_program(skip: bool, src: &str) {
     // Si skip es false, no hacemos nada
     if !skip {

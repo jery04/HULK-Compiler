@@ -8,6 +8,7 @@ mod semantic;       // semantic checker module
 use struct_printer::test_program; // import test_program directly
 
 
+/// Demo entry point with a few sample programs.
 fn main() {
 
     test_program(false, r#"

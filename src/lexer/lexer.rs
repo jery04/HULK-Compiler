@@ -14,6 +14,7 @@ pub struct Pos {
 }
 
 impl std::fmt::Display for Pos {
+    /// Format the position as line and column.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.line, self.col)
     }
@@ -27,6 +28,7 @@ pub struct Span {
 }
 
 impl std::fmt::Display for Span {
+    /// Format the span as start-end.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}-{}", self.start, self.end)
     }
@@ -253,6 +255,7 @@ pub struct LexError {
 }
 
 impl std::fmt::Display for LexError {
+    /// Format the lexical error for display.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[LexError {}] {} (encontrado {:?})", self.span, self.msg, self.slice)
     }
