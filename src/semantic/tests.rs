@@ -2111,4 +2111,625 @@ fn parent_type_requires_correct_argument_count() {
     assert_has_error(&errors, "parent type 'Base' requires 3 arguments");
 }
 
+#[test]
+fn builtin_log_two_args_is_valid() {
+    let errors = semantic_errors(r#"
+        log(8, 2);
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn builtin_log_wrong_arg_type_reports_error() {
+    let errors = semantic_errors(r#"
+        log("base", 2);
+    "#);
+    assert_has_error(&errors, "call to 'log' argument 1 expects Number, found String");
+}
+
+#[test]
+fn builtin_rand_no_args_is_valid() {
+    let errors = semantic_errors(r#"
+        rand();
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn builtin_rand_with_args_reports_arity_error() {
+    let errors = semantic_errors(r#"
+        rand(1);
+    "#);
+    assert_has_error(&errors, "call to 'rand' with invalid arity");
+}
+
+#[test]
+fn builtin_range_returns_vector_usable_in_for() {
+    let errors = semantic_errors(r#"
+        for (x in range(1, 10)) {
+            x + 1
+        };
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn builtin_sqrt_wrong_arg_type_reports_error() {
+    let errors = semantic_errors(r#"
+        sqrt(true);
+    "#);
+    assert_has_error(&errors, "call to 'sqrt' argument 1 expects Number, found Boolean");
+}
+
+#[test]
+fn builtin_pi_and_e_are_valid_in_arithmetic() {
+    let errors = semantic_errors(r#"
+        PI * 2 + E;
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn builtin_pi_as_boolean_operand_reports_error() {
+    let errors = semantic_errors(r#"
+        PI & true;
+    "#);
+    assert_has_error(&errors, "logical operator requires Boolean (left side: Number)");
+}
+
+#[test]
+fn redefining_builtin_function_sin_reports_error() {
+    let errors = semantic_errors(r#"
+        function sin(x) => x;
+        0;
+    "#);
+    assert_has_error(&errors, "builtin function 'sin' cannot be redefined");
+}
+
+#[test]
+fn redefining_builtin_type_number_reports_error() {
+    let errors = semantic_errors(r#"
+        type Number { value = 0; }
+        0;
+    "#);
+    assert_has_error(&errors, "builtin type 'Number' cannot be redefined");
+}
+
+#[test]
+fn redefining_builtin_type_string_reports_error() {
+    let errors = semantic_errors(r#"
+        type String { value = ""; }
+        0;
+    "#);
+    assert_has_error(&errors, "builtin type 'String' cannot be redefined");
+}
+
+#[test]
+fn redefining_builtin_type_boolean_reports_error() {
+    let errors = semantic_errors(r#"
+        type Boolean { value = false; }
+        0;
+    "#);
+    assert_has_error(&errors, "builtin type 'Boolean' cannot be redefined");
+}
+
+#[test]
+fn calling_type_without_new_reports_error() {
+    let errors = semantic_errors(r#"
+        type Point(x, y) { x = x; y = y; }
+        Point(1, 2);
+    "#);
+    assert_has_error(&errors, "type 'Point' must be instantiated with 'new'");
+}
+
+#[test]
+fn for_over_number_variable_reports_error() {
+    let errors = semantic_errors(r#"
+        let n: Number = 5 in
+            for (x in n) { x };
+    "#);
+    assert_has_error(&errors, "iterable expression expects Vector, found Number");
+}
+
+#[test]
+fn for_over_string_variable_reports_error() {
+    let errors = semantic_errors(r#"
+        let s: String = "hello" in
+            for (c in s) { c };
+    "#);
+    assert_has_error(&errors, "iterable expression expects Vector, found String");
+}
+
+#[test]
+fn for_over_boolean_variable_reports_error() {
+    let errors = semantic_errors(r#"
+        let b: Boolean = true in
+            for (x in b) { x };
+    "#);
+    assert_has_error(&errors, "iterable expression expects Vector, found Boolean");
+}
+
+#[test]
+fn assign_to_let_bound_variable_is_valid() {
+    let errors = semantic_errors(r#"
+        let x = 0 in {
+            x := x + 1;
+            x
+        };
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn assign_to_field_on_self_is_valid() {
+    let errors = semantic_errors(r#"
+        type Counter {
+            count: Number = 0;
+            increment() => {
+                self.count := self.count + 1;
+                self.count
+            };
+        }
+        0;
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn assign_invalid_target_literal_reports_error() {
+    let errors = semantic_errors(r#"
+        let x = 0 in {
+            1 := 5;
+            x
+        };
+    "#);
+    assert_has_error(&errors, "invalid assignment target");
+}
+
+#[test]
+fn let_binding_with_no_type_annotation_infers_correctly() {
+    let errors = semantic_errors(r#"
+        let x = 10 in x * 2;
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn let_binding_shadowing_outer_variable_is_valid() {
+    let errors = semantic_errors(r#"
+        let x = 1 in
+            let x = "ahora soy string" in
+                x;
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn let_binding_same_scope_redefines_variable_is_error() {
+    let errors = semantic_errors(r#"
+        let a = 1, a = 2 in a;
+    "#);
+    assert_has_error(&errors, "variable 'a' already defined in this scope");
+}
+
+#[test]
+fn block_inner_variable_not_visible_outside() {
+    let errors = semantic_errors(r#"
+        {
+            let inner = 42 in inner;
+        };
+        inner;
+    "#);
+    assert_has_error(&errors, "identifier 'inner' not defined");
+}
+
+#[test]
+fn nested_blocks_with_valid_scopes() {
+    let errors = semantic_errors(r#"
+        {
+            let a = 1 in {
+                let b = a + 1 in {
+                    b * 2
+                }
+            }
+        };
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn is_type_with_valid_type_is_valid() {
+    let errors = semantic_errors(r#"
+        type Animal { sound(): String => "..."; }
+        let a = new Animal() in (a is Animal);
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn is_type_with_undefined_type_reports_error() {
+    let errors = semantic_errors(r#"
+        let x = 42 in (x is Fantasma);
+    "#);
+    assert_has_error(&errors, "type 'Fantasma' not defined");
+}
+
+#[test]
+fn as_type_with_valid_type_is_valid() {
+    let errors = semantic_errors(r#"
+        type Animal { sound(): String => "..."; }
+        type Dog inherits Animal { sound(): String => "woof"; }
+        let a = new Dog() in (a as Animal);
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn as_type_with_undefined_type_reports_error() {
+    let errors = semantic_errors(r#"
+        let x = 42 in (x as Inexistente);
+    "#);
+    assert_has_error(&errors, "type 'Inexistente' not defined");
+}
+
+#[test]
+fn protocol_redefinition_reports_error() {
+    let errors = semantic_errors(r#"
+        protocol Printable { show(): String; }
+        protocol Printable { show(): String; }
+        0;
+    "#);
+    assert_has_error(&errors, "type or protocol 'Printable' already defined");
+}
+
+#[test]
+fn type_same_name_as_protocol_reports_error() {
+    let errors = semantic_errors(r#"
+        protocol Printable { show(): String; }
+        type Printable { value = 0; }
+        0;
+    "#);
+    assert_has_error(&errors, "type or protocol 'Printable' already defined");
+}
+
+#[test]
+fn protocol_method_duplicate_arity_reports_error() {
+    let errors = semantic_errors(r#"
+        protocol P {
+            calc(x: Number): Number;
+            calc(x: Number): Number;
+        }
+        0;
+    "#);
+    assert_has_error(&errors, "method 'calc' with arity 1 already defined in the protocol");
+}
+
+#[test]
+fn protocol_parameter_without_type_reports_error() {
+    let errors = semantic_errors(r#"
+        protocol P {
+            foo(untyped): Number;
+        }
+        0;
+    "#);
+    assert_has_error(&errors, "protocol method 'foo' parameter 'untyped' must be typed");
+}
+
+#[test]
+fn type_satisfies_protocol_with_multiple_methods() {
+    let errors = semantic_errors(r#"
+        protocol Shape {
+            area(): Number;
+            perimeter(): Number;
+        }
+
+        type Circle(r: Number) {
+            r = r;
+            area(): Number => PI * self.r * self.r;
+            perimeter(): Number => 2 * PI * self.r;
+        }
+
+        let s: Shape = new Circle(5) in s.area();
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn type_missing_one_protocol_method_reports_error() {
+    let errors = semantic_errors(r#"
+        protocol Shape {
+            area(): Number;
+            perimeter(): Number;
+        }
+
+        type Square(side: Number) {
+            side = side;
+            area(): Number => self.side * self.side;
+        }
+
+        let s: Shape = new Square(4) in s.area();
+    "#);
+    assert_has_error(&errors, "does not satisfy the requirements of Shape");
+}
+
+#[test]
+fn duplicate_attribute_in_type_reports_error() {
+    let errors = semantic_errors(r#"
+        type Broken {
+            x: Number = 1;
+            x: Number = 2;
+        }
+        0;
+    "#);
+    assert_has_error(&errors, "attribute 'x' already defined in the type");
+}
+
+#[test]
+fn duplicate_method_same_arity_in_type_reports_error() {
+    let errors = semantic_errors(r#"
+        type Broken {
+            foo(x: Number): Number => x;
+            foo(x: Number): Number => x + 1;
+        }
+        0;
+    "#);
+    assert_has_error(&errors, "method 'foo' with arity 1 already defined in the type");
+}
+
+#[test]
+fn attribute_and_method_same_name_reports_error() {
+    let errors = semantic_errors(r#"
+        type Broken {
+            value: Number = 0;
+            value(): Number => self.value;
+        }
+        0;
+    "#);
+    assert!(
+        errors.iter().any(|e| e.message.contains("conflicts with")),
+        "expected a name-conflict error, got: {:?}", errors
+    );
+}
+
+#[test]
+fn three_level_cyclic_inheritance_reports_error() {
+    let errors = semantic_errors(r#"
+        type A inherits C { v = 1; }
+        type B inherits A { v = 2; }
+        type C inherits B { v = 3; }
+        0;
+    "#);
+    assert!(errors.iter().any(|e| e.message.contains("cyclic inheritance")), "expected a cyclic-inheritance error, got: {:?}", errors);
+}
+
+#[test]
+fn deep_valid_inheritance_chain_is_accepted() {
+    let errors = semantic_errors(r#"
+        type A { val(): Number => 1; }
+        type B inherits A { extra(): Number => 2; }
+        type C inherits B { more(): Number => 3; }
+
+        let c = new C() in c.val();
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn type_cannot_inherit_from_protocol_reports_error() {
+    let errors = semantic_errors(r#"
+        protocol Drawable { draw(): String; }
+        type MyShape inherits Drawable { x = 0; }
+        0;
+    "#);
+    assert_has_error(&errors, "type 'MyShape' cannot inherit from protocol 'Drawable'");
+}
+
+#[test]
+fn base_call_with_wrong_arity_reports_error() {
+    let errors = semantic_errors(r#"
+        type Parent {
+            greet(n: Number): Number => n;
+        }
+        type Child inherits Parent {
+            greet(n: Number): Number => base(n, n);
+        }
+        0;
+    "#);
+    assert_has_error(&errors, "base method 'greet' with arity 2 not defined on parent type");
+}
+
+#[test]
+fn base_in_type_without_parent_reports_error() {
+    let errors = semantic_errors(r#"
+        type Lonely {
+            act() => base();
+        }
+        0;
+    "#);
+    assert_has_error(&errors, "base requires inheritance");
+}
+
+#[test]
+fn function_without_annotations_infers_return_from_body() {
+    let errors = semantic_errors(r#"
+        function double(x) => x + x;
+        let r: Number = double(5) in r;
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn function_declared_return_type_mismatch_reports_error() {
+    let errors = semantic_errors(r#"
+        function broken(): Number => "not a number";
+        0;
+    "#);
+    assert_has_error(&errors, "function 'broken' return type expects Number");
+}
+
+#[test]
+fn method_declared_return_type_mismatch_reports_error() {
+    let errors = semantic_errors(r#"
+        type Broken {
+            value(): Number => "should be number";
+        }
+        0;
+    "#);
+    assert_has_error(&errors, "method 'value' return type expects Number");
+}
+
+#[test]
+fn concat_space_with_two_strings_is_valid() {
+    let errors = semantic_errors(r#"
+        "hello" @@ "world";
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn concat_at_with_number_and_string_is_valid() {
+    let errors = semantic_errors(r#"
+        42 @ " items";
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn concat_at_with_two_numbers_reports_error() {
+    let errors = semantic_errors(r#"
+        10 @ 20;
+    "#);
+    assert_has_error(&errors, "concatenation operator requires String");
+}
+
+#[test]
+fn field_access_on_typed_variable_is_valid() {
+    let errors = semantic_errors(r#"
+        type Box {
+            width: Number = 10;
+            height: Number = 5;
+        }
+        let b: Box = new Box() in b.width + b.height;
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn method_call_on_new_instance_is_valid() {
+    let errors = semantic_errors(r#"
+        type Calc {
+            add(a: Number, b: Number): Number => a + b;
+        }
+        new Calc().add(3, 4);
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn method_call_on_typed_let_binding_is_valid() {
+    let errors = semantic_errors(r#"
+        type Greeter {
+            greet(): String => "hi";
+        }
+        let g: Greeter = new Greeter() in g.greet();
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn if_elif_else_all_branches_same_type_is_valid() {
+    let errors = semantic_errors(r#"
+        let x = 5 in
+            if (x > 3) { 1 }
+            elif (x > 1) { 2 }
+            else { 3 };
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn nested_if_inside_while_is_valid() {
+    let errors = semantic_errors(r#"
+        let i = 0 in
+            while (i < 10) {
+                if (i > 5) { i := i + 2 }
+                else { i := i + 1 };
+                i
+            };
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn duplicate_function_definition_reports_error() {
+    let errors = semantic_errors(r#"
+        function add(a, b) => a + b;
+        function add(a, b) => a - b;
+        0;
+    "#);
+    assert_has_error(&errors, "function 'add' already defined");
+}
+
+#[test]
+fn duplicate_type_definition_reports_error() {
+    let errors = semantic_errors(r#"
+        type Point { x = 0; }
+        type Point { y = 0; }
+        0;
+    "#);
+    assert_has_error(&errors, "type or protocol 'Point' already defined");
+}
+
+#[test]
+fn fibonacci_program_is_valid() {
+    let errors = semantic_errors(r#"
+        function fib(n: Number): Number =>
+            if (n <= 1) { n }
+            else { fib(n - 1) + fib(n - 2) };
+
+        let result = fib(10) in print(result);
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn linked_types_program_is_valid() {
+    let errors = semantic_errors(r#"
+        type Node(value: Number) {
+            value = value;
+            getValue(): Number => self.value;
+        }
+
+        type DoubleNode(value: Number, extra: Number) inherits Node(value) {
+            extra = extra;
+            getExtra(): Number => self.extra;
+        }
+
+        let n = new DoubleNode(1, 2) in n.getValue() + n.getExtra();
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
+#[test]
+fn protocol_chain_and_type_hierarchy_together_is_valid() {
+    let errors = semantic_errors(r#"
+        protocol Describable {
+            describe(): String;
+        }
+
+        protocol Printable extends Describable {
+            print(): String;
+        }
+
+        type Item(name: String) {
+            name = name;
+            describe(): String => self.name;
+            print(): String => "Item: " @ self.name;
+        }
+
+        let p: Printable = new Item("pencil") in p.print();
+    "#);
+    assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+}
+
 
