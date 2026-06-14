@@ -13,6 +13,7 @@ config.toml
 # IDEs
 .idea/
 .vscode/
+.claude/
 *.iml
 
 # macOS
@@ -35,4 +36,6 @@ perf.data
 perf.data.old
 flamegraph.svg
 hulk-documentation.md
+CLAUDE.md
 orientacion.md
+DEVELOPMENT_PLAN.md
