@@ -1701,10 +1701,13 @@ fn string_all_escapes() {
 }
 
 #[test]
-fn string_unknown_escape_preserved() {
-    // escape desconocido se preserva literalmente: \z → \z
+fn string_unknown_escape_is_lexical_error() {
+    // Un escape desconocido (\z) es un error léxico, no se preserva: el contrato
+    // exige rechazar literales con escapes inválidos.
+    let errs = errors(r#""\z""#);
+    assert!(!errs.is_empty(), "se esperaba un error léxico para \\z");
     let toks = tokens(r#""\z""#);
-    assert_eq!(toks, vec![Token::StringLit("\\z".into())]);
+    assert!(!toks.contains(&Token::StringLit("\\z".into())));
 }
 
 #[test]

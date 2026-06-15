@@ -231,9 +231,11 @@ fn lex_string(lex: &mut logos::Lexer<Token>) -> Option<String> {
                 '"'  => out.push('"'),
                 'n'  => out.push('\n'),
                 't'  => out.push('\t'),
+                'r'  => out.push('\r'),
+                '0'  => out.push('\0'),
                 '\\' => out.push('\\'),
-                // Unknown escape: keep it literal.
-                other => { out.push('\\'); out.push(other); }
+                // Unknown escape: reject the whole literal as a lexical error.
+                _ => return None,
             }
         } else {
             out.push(c);

@@ -21,7 +21,8 @@ fn parse_source_with_errors(source: &str) -> (Option<Program>, Vec<String>) {
     let stream = TokenStream::new(source);
     let mut parser = Parser::new(stream);
     let program = parser.parse_program();
-    (program, parser.errors)
+    let errors = parser.errors.iter().map(|e| e.to_string()).collect();
+    (program, errors)
 }
 
 fn assert_errors_contain(errors: &[String], expected: &[&str]) {

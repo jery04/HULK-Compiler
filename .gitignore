@@ -10,6 +10,13 @@ config.toml
 *.banner
 *.out
 
+# Artefactos del contrato Matcom (make build / ./hulk <file>)
+/hulk
+/hulk.exe
+/output
+/output.exe
+/output.c
+
 # IDEs
 .idea/
 .vscode/

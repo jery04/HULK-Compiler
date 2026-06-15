@@ -758,14 +758,22 @@ impl SemanticChecker {
             }
             Expr::FieldAccess { object, field, span } => {
                 self.check_expr(object);
-                if self.ctx.in_method && matches!(**object, Expr::Ident { ref name, .. } if name == "self") {
-                    if let Some(current) = &self.ctx.current_type {
-                        if !current.attrs.contains(field) {
-                            self.report(*span, format!(
-                                "attribute '{}' not defined on current type",
-                                field
-                            ));
-                        }
+                if self.ctx.in_method && is_self_ref(object) {
+                    let missing = if let Some(current) = &self.ctx.current_type {
+                        let own = current.attrs.contains(field);
+                        let via_parent = current
+                            .parent
+                            .as_ref()
+                            .map_or(false, |p| self.ctx.type_has_attr(p, field));
+                        !own && !via_parent
+                    } else {
+                        false
+                    };
+                    if missing {
+                        self.report(*span, format!(
+                            "attribute '{}' not defined on current type",
+                            field
+                        ));
                     }
                 }
             }
@@ -790,12 +798,14 @@ impl SemanticChecker {
                     if let Some(obj_ty) = self.infer_simple_type(object) {
                         if let Some(signature) = self.method_signature_for_simple_type(&obj_ty, method, args.len()).cloned() {
                             self.check_callable_args(method, args, &signature.params, "method", *span);
-                        } else if let SimpleType::Named(type_name) = obj_ty {
+                        } else {
+                            // No such method — applies equally to user types and the
+                            // builtin Number/String/Boolean, which expose no methods.
                             self.report(*span, format!(
                                 "method '{}' with arity {} not defined on type '{}'",
                                 method,
                                 args.len(),
-                                type_name
+                                obj_ty.display_name()
                             ));
                         }
                     }
@@ -1033,6 +1043,12 @@ impl SemanticChecker {
             }
             Expr::For { var, iterable, body, .. } => {
                 self.check_expr(iterable);
+                if !self.is_iterable_expr(iterable) {
+                    self.report(
+                        expr_span(iterable),
+                        "expression is not iterable".to_string(),
+                    );
+                }
                 self.mark_iterable_usage(iterable);
                 self.with_scope(|this| {
                     this.define_var(var, expr_span(expr));
@@ -1187,7 +1203,13 @@ impl SemanticChecker {
             return;
         }
 
-        if self.ctx.is_var_defined(name) {
+        // A defined variable that is not also a function is not callable: HULK in
+        // this scope has no first-class functions, so `f(...)` on a value is an error.
+        if self.ctx.is_var_defined(name)
+            && !self.ctx.has_function_name(name)
+            && !self.ctx.is_builtin_function(name)
+        {
+            self.report(span, format!("'{}' is not a function", name));
             return;
         }
         if self.ctx.has_function(name, args.len()) {
@@ -1512,6 +1534,24 @@ impl SemanticChecker {
                     ),
                 );
             }
+        }
+    }
+
+    /// Conservatively decide whether an expression can be iterated over by `for`.
+    /// Scalars (Number/String/Boolean) are rejected; `range(...)`, vectors and
+    /// objects (possible iterable protocols) are accepted, and unknown types are
+    /// left alone to avoid false positives during inference.
+    fn is_iterable_expr(&self, expr: &Expr) -> bool {
+        if let Expr::Call { callee, .. } = expr {
+            if let Expr::Ident { name, .. } = &**callee {
+                if name == "range" {
+                    return true;
+                }
+            }
+        }
+        match self.infer_simple_type(expr) {
+            Some(SimpleType::Number) | Some(SimpleType::String) | Some(SimpleType::Boolean) => false,
+            _ => true,
         }
     }
 

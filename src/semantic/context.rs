@@ -85,6 +85,23 @@ impl Context {
         self.var_types.pop();
     }
 
+    /// Whether `type_name` (or any ancestor) declares an attribute named `field`.
+    pub(super) fn type_has_attr(&self, type_name: &str, field: &str) -> bool {
+        let mut cur = Some(type_name.to_string());
+        while let Some(tn) = cur {
+            match self.types.get(&tn) {
+                Some(info) => {
+                    if info.attrs.contains(field) {
+                        return true;
+                    }
+                    cur = info.parent.clone();
+                }
+                None => return false,
+            }
+        }
+        false
+    }
+
     /// Define a variable in the current scope. Returns false on redefinition.
     pub(super) fn define_var(&mut self, name: &str) -> bool {
         if let Some(scope) = self.var_scopes.last_mut() {

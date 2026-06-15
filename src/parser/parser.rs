@@ -10,10 +10,24 @@ use crate::parser::ast::*;
 // PARSER STRUCT AND SETUP
 // ══════════════════════════════════════════════════════════════════════════════
 
+/// A syntactic error produced during parsing, carrying a source span so the
+/// contract driver can render `(line,col) SYNTACTIC: message`.
+#[derive(Debug, Clone)]
+pub struct ParseError {
+    pub span: Span,
+    pub message: String,
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[ParseError {}] {}", self.span, self.message)
+    }
+}
+
 pub struct Parser<'src> {
     tokens:  TokenStream<'src>,
     current: SpannedToken,
-    pub errors: Vec<String>,
+    pub errors: Vec<ParseError>,
 }
 
 
@@ -172,16 +186,14 @@ impl<'src> Parser<'src> {
     /// Record a parsing error with the current token's span.
     fn error(&mut self, msg: &str) {
         let span = self.current.span;
-        let full = format!("[ParseError {}] {}", span, msg);
-        self.errors.push(full);
+        self.errors.push(ParseError { span, message: msg.to_string() });
         self.synchronize();
     }
 
     /// Record a parsing error with the current token's span, without synchronizing.
     fn error_no_sync(&mut self, msg: &str) {
         let span = self.current.span;
-        let full = format!("[ParseError {}] {}", span, msg);
-        self.errors.push(full);
+        self.errors.push(ParseError { span, message: msg.to_string() });
     }
 
     /// Synchronize to a safe point for error recovery (panic-mode).
@@ -675,12 +687,18 @@ impl<'src> Parser<'src> {
 
             Token::Base => {
                 self.advance();
-                let (args, rparen_span) = self.parse_arg_list()?;
-                let span = Span {
-                    start: span.start,
-                    end: rparen_span.end,
-                };
-                Some(Expr::Base { args, span })
+                // `base(...)` is the parent-call construct; a bare `base` (e.g. used
+                // as a variable or method receiver) is an ordinary identifier.
+                if self.check(&Token::LParen) {
+                    let (args, rparen_span) = self.parse_arg_list()?;
+                    let span = Span {
+                        start: span.start,
+                        end: rparen_span.end,
+                    };
+                    Some(Expr::Base { args, span })
+                } else {
+                    Some(Expr::Ident { name: "base".to_string(), span })
+                }
             }
 
             Token::New => {
@@ -937,8 +955,13 @@ impl<'src> Parser<'src> {
     }
 
     // Parse a single let binding: ["let"] IDENT TypeAnnotation? '=' Expr
-    fn parse_let_binding(&mut self) -> Option<LetBinding> {
-        let _ = self.matches(&Token::Let);
+    fn parse_let_binding(&mut self, allow_let: bool) -> Option<LetBinding> {
+        // Only bindings after a comma may carry their own `let` keyword; the very
+        // first binding's `let` was already consumed by `parse_let`, so `let let x`
+        // must be reported as a syntactic error rather than silently accepted.
+        if allow_let {
+            let _ = self.matches(&Token::Let);
+        }
 
         let (name, name_span, can_continue) = match self.peek().clone() {
             Token::Ident(n) => {
@@ -946,6 +969,13 @@ impl<'src> Parser<'src> {
                 let name_span = self.current.span;
                 self.advance();
                 (n, name_span, true)
+            }
+            // `base` is only the parent-call keyword when followed by `(`; elsewhere
+            // it is a perfectly ordinary identifier and may name a binding.
+            Token::Base => {
+                let name_span = self.current.span;
+                self.advance();
+                ("base".to_string(), name_span, true)
             }
             Token::InternalIdent(_) => {
                 let name_span = self.current.span;
@@ -995,10 +1025,10 @@ impl<'src> Parser<'src> {
         self.advance(); // consume 'let'
 
         let mut bindings = Vec::new();
-        bindings.push(self.parse_let_binding()?);
+        bindings.push(self.parse_let_binding(false)?);
 
         while self.matches(&Token::Comma) {
-            bindings.push(self.parse_let_binding()?);
+            bindings.push(self.parse_let_binding(true)?);
         }
 
         self.expect(&Token::In, "expected 'in' after let bindings")?;
@@ -1244,12 +1274,12 @@ impl<'src> Parser<'src> {
             // Disallow "=> { ... }" — record error but continue by parsing the block as the body
             if self.check(&Token::LBrace) {
                 let brace_span = self.current.span;
-                self.errors.push(format!("[ParseError {}] inline function body cannot be a block; use '{{...}}' without '=>' or an expression after '=>'", brace_span));
+                self.errors.push(ParseError { span: brace_span, message: "inline function body cannot be a block; use '{...}' without '=>' or an expression after '=>'".to_string() });
                 // Parse the block anyway so we can continue parsing subsequent items
                 let block_expr = self.parse_block()?;
                 if self.check(&Token::Semicolon) {
                     let semi_span = self.current.span;
-                    self.errors.push(format!("[ParseError {}] unexpected ';' after function block body", semi_span));
+                    self.errors.push(ParseError { span: semi_span, message: "unexpected ';' after function block body".to_string() });
                     self.advance();
                 }
                 FuncBody::Block(Box::new(block_expr))
@@ -1264,7 +1294,7 @@ impl<'src> Parser<'src> {
             if self.check(&Token::Semicolon) {
                 // Report error but consume semicolon to continue parsing
                 let semi_span = self.current.span;
-                self.errors.push(format!("[ParseError {}] unexpected ';' after function block body", semi_span));
+                self.errors.push(ParseError { span: semi_span, message: "unexpected ';' after function block body".to_string() });
                 self.advance();
             }
             FuncBody::Block(Box::new(block_expr))
@@ -1398,12 +1428,12 @@ impl<'src> Parser<'src> {
                         // Disallow "=> { ... }" for inline method bodies — record error but continue
                         if self.check(&Token::LBrace) {
                             let brace_span = self.current.span;
-                            self.errors.push(format!("[ParseError {}] inline method body cannot be a block; use '{{...}}' without '=>' or an expression after '=>'", brace_span));
+                            self.errors.push(ParseError { span: brace_span, message: "inline method body cannot be a block; use '{...}' without '=>' or an expression after '=>'".to_string() });
                             // Parse the block to continue parsing members
                             let block = self.parse_block()?;
                             if self.check(&Token::Semicolon) {
                                 let semi_span = self.current.span;
-                                self.errors.push(format!("[ParseError {}] unexpected ';' after method block body", semi_span));
+                                self.errors.push(ParseError { span: semi_span, message: "unexpected ';' after method block body".to_string() });
                                 self.advance();
                             }
                             FuncBody::Block(Box::new(block))
@@ -1417,7 +1447,7 @@ impl<'src> Parser<'src> {
                         let block = self.parse_block()?;
                         if self.check(&Token::Semicolon) {
                             let semi_span = self.current.span;
-                            self.errors.push(format!("[ParseError {}] unexpected ';' after method block body", semi_span));
+                            self.errors.push(ParseError { span: semi_span, message: "unexpected ';' after method block body".to_string() });
                             self.advance();
                         }
                         FuncBody::Block(Box::new(block))
