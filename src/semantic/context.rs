@@ -571,6 +571,19 @@ impl Context {
             (SimpleType::Vector(actual_inner), SimpleType::Vector(expected_inner)) => {
                 self.simple_type_conforms_to(actual_inner, expected_inner)
             }
+            // A user type that implements the iterator protocol (`current(): U`)
+            // conforms to an iterable annotation `T*` (modeled as Vector<T>) when
+            // `U` conforms to `T`. This lets generator objects be passed where an
+            // iterable is expected.
+            (SimpleType::Named(actual_name), SimpleType::Vector(expected_inner)) => {
+                match self
+                    .type_method_signature(actual_name, "current", 0)
+                    .and_then(|sig| sig.return_type.clone())
+                {
+                    Some(ret) => self.simple_type_conforms_to(&ret, expected_inner),
+                    None => false,
+                }
+            }
             _ => false,
         }
     }

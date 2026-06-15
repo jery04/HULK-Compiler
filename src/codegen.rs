@@ -533,11 +533,51 @@ impl<'a> Codegen<'a> {
                 t
             }
             Expr::AsType { expr, .. } => self.gen_expr(expr),
-            Expr::For { .. } => {
-                // Iterables are out of scope for the required suite; produce a no-op value.
-                let t = self.fresh();
-                self.emit(&format!("Value {} = mk_num(0);", t));
-                t
+            Expr::For { var, iterable, body, .. } => {
+                let result = self.fresh();
+                self.emit(&format!("Value {} = mk_num(0);", result));
+
+                // `for (x in range(lo, hi))` lowers to a counted loop.
+                if let Expr::Call { callee, args, .. } = &**iterable {
+                    if let Expr::Ident { name, .. } = &**callee {
+                        if name == "range" && args.len() == 2 {
+                            let lo = self.gen_expr(&args[0]);
+                            let hi = self.gen_expr(&args[1]);
+                            let idx = self.fresh();
+                            self.emit(&format!(
+                                "for (double {i} = {lo}.num; {i} < {hi}.num; {i} += 1.0) {{",
+                                i = idx, lo = lo, hi = hi
+                            ));
+                            self.scopes.push(HashMap::new());
+                            let xv = self.new_var(var);
+                            self.emit(&format!("Value {} = mk_num({});", xv, idx));
+                            let _ = self.gen_expr(body);
+                            self.scopes.pop();
+                            self.emit("}");
+                            return result;
+                        }
+                    }
+                }
+
+                // General iterable object: drive the HULK iterator protocol
+                // `next(): Boolean` / `current(): T` through dynamic dispatch.
+                let it = self.gen_expr(iterable);
+                let snext = *self.method_slots.get("next").unwrap_or(&0);
+                let scur = *self.method_slots.get("current").unwrap_or(&0);
+                self.emit(&format!(
+                    "while (vtables[{it}.obj->type_id][{sn}]({it}, NULL).b) {{",
+                    it = it, sn = snext
+                ));
+                self.scopes.push(HashMap::new());
+                let xv = self.new_var(var);
+                self.emit(&format!(
+                    "Value {} = vtables[{it}.obj->type_id][{sc}]({it}, NULL);",
+                    xv, it = it, sc = scur
+                ));
+                let _ = self.gen_expr(body);
+                self.scopes.pop();
+                self.emit("}");
+                result
             }
             Expr::Error { .. } => {
                 let t = self.fresh();
