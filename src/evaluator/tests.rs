@@ -1,3 +1,13 @@
+//! Unit tests for the arithmetic evaluator.
+//!
+//! These tests verify that the evaluator correctly computes results for
+//! various expressions, including:
+//! - Basic arithmetic and operator precedence.
+//! - Parenthesized expressions.
+//! - Mathematical functions (`sqrt`, `exp`, `sin`, `cos`, `log`).
+//! - The constant `PI`.
+//! - Error cases (division by zero, invalid logarithms, negative square root).
+
 use crate::evaluator::evaluator::evaluate;
 
 // ============================================

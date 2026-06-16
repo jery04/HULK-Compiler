@@ -1,3 +1,10 @@
+//! Unit tests for the HULK lexer.
+//!
+//! These tests verify tokenization of keywords, literals, operators,
+//! comments, and error reporting. Each test checks that a given input
+//! produces the expected sequence of tokens and/or lexical errors.
+
+
 #![allow(non_snake_case)]
 
 use crate::lexer::lexer::*;

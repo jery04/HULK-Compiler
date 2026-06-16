@@ -1,3 +1,10 @@
+//! Integration tests for the semantic checker.
+//!
+//! These tests verify that the type checker correctly identifies semantic errors
+//! in invalid programs and accepts valid programs. Each test checks a specific
+//! aspect of the type system, such as operator overloading, inheritance,
+//! protocol conformance, and scoping rules.
+
 use super::checker::{check_program, SemanticError};
 use crate::lexer::lexer::TokenStream;
 use crate::parser::Parser;

@@ -1,3 +1,19 @@
+//! Lexical analysis for the HULK language.
+//!
+//! This module provides:
+//! - [`Pos`] and [`Span`] for source code positions.
+//! - [`LineIndex`] for efficient byte-offset to line/column conversion.
+//! - [`Token`] enumeration representing all HULK tokens.
+//! - [`TokenStream`] for streaming tokens with error collection.
+//! - [`LexError`] for reporting lexical errors.
+//!
+//! The lexer is built using the [`logos`] crate and handles:
+//! - Keywords, identifiers, literals (numbers, strings), operators, and punctuation.
+//! - Skipping whitespace and line comments.
+//! - Collecting lexical errors without stopping the token stream.
+//! - An EOF sentinel token for parser convenience.
+
+
 #![allow(dead_code)]
 
 use logos::{Logos, SpannedIter};

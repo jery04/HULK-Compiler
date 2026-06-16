@@ -1,3 +1,19 @@
+//! Arithmetic expression evaluator.
+//!
+//! This module implements a recursive evaluator that takes a HULK expression
+//! and computes its numeric result. It supports:
+//! - Numeric literals (parsed as `f64` internally, truncated to `i64`).
+//! - Constants: `PI` (3.14159...).
+//! - Unary operators: `-` (negation).
+//! - Binary operators: `+`, `-`, `*`, `/`, `%`, `^` (power).
+//! - Function calls: `sin`, `cos`, `sqrt`, `exp`, `log(base, value)`.
+//!
+//! # Errors
+//! The evaluator returns `None` for invalid operations such as division by zero,
+//! modulo by zero, logarithm of non-positive numbers, or square root of negative values.
+
+
+
 use crate::lexer::lexer::TokenStream;
 use crate::parser::Parser;
 

@@ -1,3 +1,8 @@
+//! Semantic checker implementation.
+//!
+//! This module provides the [`SemanticChecker`] type and the [`check_program`] function,
+//! which together perform type inference, scope resolution, and error reporting.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::lexer::lexer::Span;
