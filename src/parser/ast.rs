@@ -268,6 +268,38 @@ pub enum Expr {
         span:  Span,
     },
 
+    // ── Vectors (A.12) ────────────────────────
+
+    /// Vector literal: `[1, 2, 3]` (doc syntax) or `{1, 2, 3}` (Matcom syntax).
+    VectorLit {
+        elements: Vec<Expr>,
+        span:     Span,
+    },
+
+    /// Sized vector allocation: `new T[n]` or `new T[n]{ i -> expr }`.
+    /// `init` is a bounded index→value initializer (the var name and body).
+    VectorSized {
+        elem_ty: TypeExpr,
+        size:    Box<Expr>,
+        init:    Option<(String, Box<Expr>)>,
+        span:    Span,
+    },
+
+    /// Vector comprehension (doc A.12.2): `[<body> | <var> in <iterable>]`.
+    VectorComp {
+        body:     Box<Expr>,
+        var:      String,
+        iterable: Box<Expr>,
+        span:     Span,
+    },
+
+    /// Indexing: `object[index]`.
+    Index {
+        object: Box<Expr>,
+        index:  Box<Expr>,
+        span:   Span,
+    },
+
     /// Error placeholder used for recovery after a parse error.
     Error {
         span: Span,
@@ -306,6 +338,30 @@ pub enum BinOp {
     // String
     Concat,       // @
     ConcatSpace,  // @@
+}
+
+impl BinOp {
+    /// The instance-method name an operand type may define to overload this binary
+    /// operator (operator-overloading extension): `a OP b` dispatches to `a.method(b)`
+    /// when `a`'s type defines `method`. Returns `None` for non-overloadable operators.
+    pub fn operator_method(self) -> Option<&'static str> {
+        Some(match self {
+            BinOp::Add => "plus",
+            BinOp::Sub => "minus",
+            BinOp::Mul => "mult",
+            BinOp::Div => "div",
+            BinOp::Mod => "mod",
+            BinOp::Pow => "pow",
+            BinOp::Concat | BinOp::ConcatSpace => "concat",
+            BinOp::Eq => "equals",
+            BinOp::NotEq => "neq",
+            BinOp::Lt => "less",
+            BinOp::Gt => "greater",
+            BinOp::LtEq => "leq",
+            BinOp::GtEq => "geq",
+            BinOp::And | BinOp::Or => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

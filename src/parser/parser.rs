@@ -261,7 +261,7 @@ impl<'src> Parser<'src> {
 
         if self.matches(&Token::ColonAssign) {
             match &left {
-                Expr::Ident { .. } | Expr::FieldAccess { .. } => {
+                Expr::Ident { .. } | Expr::FieldAccess { .. } | Expr::Index { .. } => {
                     let value = self.parse_assign()?;
                     let span = Span {
                         start: left.span().start,
@@ -619,6 +619,25 @@ impl<'src> Parser<'src> {
                     expr = Expr::AsType { expr: Box::new(expr), ty, span };
                 }
 
+                // Indexing: object[index]
+                Token::LBracket => {
+                    self.advance();
+                    let index = match self.parse_expr() {
+                        Some(e) => e,
+                        None => self.error_expr(),
+                    };
+                    let rb = self.expect(&Token::RBracket, "expected ']' to close index")?;
+                    let span = Span {
+                        start: expr.span().start,
+                        end: rb.span.end,
+                    };
+                    expr = Expr::Index {
+                        object: Box::new(expr),
+                        index: Box::new(index),
+                        span,
+                    };
+                }
+
                 _ => break,
             }
         }
@@ -719,11 +738,71 @@ impl<'src> Parser<'src> {
                         return Some(Expr::Error { span });
                     }
                 };
-                    let (args, rparen_span) = self.parse_arg_list()?;
-                    let span = Span {
-                        start: span.start,
-                        end: rparen_span.end,
+
+                // Sized vector: `new T ('[]')* '[' size ']' ( '{' i '->' body '}' )?`
+                if self.check(&Token::LBracket) {
+                    let mut elem_ty = TypeExpr::Named(type_name);
+                    let mut size_expr: Option<Expr> = None;
+                    let mut end = self.current.span;
+                    while self.check(&Token::LBracket) {
+                        self.advance(); // '['
+                        if self.check(&Token::RBracket) {
+                            end = self.current.span;
+                            self.advance(); // empty '[]' raises the element-type dimension
+                            elem_ty = TypeExpr::Vector(Box::new(elem_ty));
+                        } else {
+                            let sz = match self.parse_expr() {
+                                Some(e) => e,
+                                None => self.error_expr(),
+                            };
+                            let rb = self.expect(&Token::RBracket, "expected ']' after array size")?;
+                            end = rb.span;
+                            size_expr = Some(sz);
+                            break;
+                        }
+                    }
+                    let size_expr = size_expr.unwrap_or_else(|| {
+                        self.error_no_sync("expected array size in 'new T[...]'");
+                        self.error_expr()
+                    });
+                    // Optional bounded index initializer: `{ i -> body }`
+                    let init = if self.check(&Token::LBrace) {
+                        self.advance(); // '{'
+                        let var = match self.peek().clone() {
+                            Token::Ident(n) => {
+                                self.advance();
+                                n
+                            }
+                            _ => {
+                                self.error_no_sync("expected index variable in array initializer");
+                                "__parse_error__".to_string()
+                            }
+                        };
+                        self.expect(&Token::ThinArrow, "expected '->' in array initializer")?;
+                        let body = match self.parse_expr() {
+                            Some(e) => e,
+                            None => self.error_expr(),
+                        };
+                        let rb = self.expect(&Token::RBrace, "expected '}' to close array initializer")?;
+                        end = rb.span;
+                        Some((var, Box::new(body)))
+                    } else {
+                        None
                     };
+                    let span = Span { start: span.start, end: end.end };
+                    return Some(Expr::VectorSized {
+                        elem_ty,
+                        size: Box::new(size_expr),
+                        init,
+                        span,
+                    });
+                }
+
+                let (args, rparen_span) = self.parse_arg_list()?;
+                let span = Span {
+                    start: span.start,
+                    end: rparen_span.end,
+                };
                 Some(Expr::New {
                     type_name,
                     args,
@@ -776,7 +855,112 @@ impl<'src> Parser<'src> {
             }
 
             Token::LBrace => {
-                self.parse_block()
+                // `{` is either an expression block (`;`-separated) or a Matcom vector
+                // literal (`,`-separated). Disambiguate by the separator after the first
+                // expression. Function/method bodies call `parse_block` directly and are
+                // unaffected by this expression-position handling.
+                let start = self.current.span;
+                self.advance(); // '{'
+                if self.check(&Token::RBrace) {
+                    let rb = self.current.clone();
+                    self.advance();
+                    return Some(Expr::Block { exprs: vec![], span: Span { start: start.start, end: rb.span.end } });
+                }
+                let first = match self.parse_expr() {
+                    Some(e) => e,
+                    None => self.error_expr(),
+                };
+                if self.check(&Token::Comma) {
+                    let mut elements = vec![first];
+                    while self.matches(&Token::Comma) {
+                        if self.check(&Token::RBrace) {
+                            break;
+                        }
+                        elements.push(match self.parse_expr() {
+                            Some(e) => e,
+                            None => self.error_expr(),
+                        });
+                    }
+                    let rb = self.expect(&Token::RBrace, "expected '}' to close vector literal")?;
+                    return Some(Expr::VectorLit { elements, span: Span { start: start.start, end: rb.span.end } });
+                }
+                // Expression block: mirror parse_block's separator handling.
+                let mut exprs = vec![first];
+                loop {
+                    if self.matches(&Token::Semicolon) {
+                        if self.check(&Token::RBrace) || self.is_at_end() {
+                            break;
+                        }
+                        exprs.push(match self.parse_expr() {
+                            Some(e) => e,
+                            None => self.error_expr(),
+                        });
+                        continue;
+                    }
+                    if self.check(&Token::RBrace) {
+                        break;
+                    }
+                    self.error_no_sync("expected ';' or '}' after block expression");
+                    if !self.recover_to(&[Token::Semicolon, Token::RBrace]) {
+                        break;
+                    }
+                }
+                let rb = self.expect(&Token::RBrace, "expected '}' to close block")?;
+                Some(Expr::Block { exprs, span: Span { start: start.start, end: rb.span.end } })
+            }
+
+            Token::LBracket => {
+                // `[ e, e, ... ]` vector literal, or `[ body | var in iterable ]`
+                // comprehension (doc A.12). The comprehension body is parsed below the
+                // `|` (OR) precedence so the bar can act as the comprehension separator.
+                let start = self.current.span;
+                self.advance(); // '['
+                if self.check(&Token::RBracket) {
+                    let rb = self.current.clone();
+                    self.advance();
+                    return Some(Expr::VectorLit { elements: vec![], span: Span { start: start.start, end: rb.span.end } });
+                }
+                let first = match self.parse_and() {
+                    Some(e) => e,
+                    None => self.error_expr(),
+                };
+                if self.check(&Token::Pipe) {
+                    self.advance(); // '|'
+                    let var = match self.peek().clone() {
+                        Token::Ident(n) => {
+                            self.advance();
+                            n
+                        }
+                        _ => {
+                            self.error_no_sync("expected variable in vector comprehension");
+                            "__parse_error__".to_string()
+                        }
+                    };
+                    self.expect(&Token::In, "expected 'in' in vector comprehension")?;
+                    let iterable = match self.parse_expr() {
+                        Some(e) => e,
+                        None => self.error_expr(),
+                    };
+                    let rb = self.expect(&Token::RBracket, "expected ']' to close comprehension")?;
+                    return Some(Expr::VectorComp {
+                        body: Box::new(first),
+                        var,
+                        iterable: Box::new(iterable),
+                        span: Span { start: start.start, end: rb.span.end },
+                    });
+                }
+                let mut elements = vec![first];
+                while self.matches(&Token::Comma) {
+                    if self.check(&Token::RBracket) {
+                        break;
+                    }
+                    elements.push(match self.parse_expr() {
+                        Some(e) => e,
+                        None => self.error_expr(),
+                    });
+                }
+                let rb = self.expect(&Token::RBracket, "expected ']' to close vector literal")?;
+                Some(Expr::VectorLit { elements, span: Span { start: start.start, end: rb.span.end } })
             }
 
             // Phase 2: Binding and control flow
@@ -897,16 +1081,16 @@ impl<'src> Parser<'src> {
                     return Some((TypeExpr::Iterable(Box::new(TypeExpr::Named(name))), star_span));
                 }
 
-                // Vector: IDENT '[]'
-                if self.check(&Token::LBracket) {
-                    // consume '[' then expect ']'
+                // Vector: IDENT ('[]')+  (supports nesting, e.g. Number[][])
+                let mut ty = TypeExpr::Named(name);
+                let mut last_span = name_span;
+                while self.check(&Token::LBracket) {
                     self.expect_with_sync(&Token::LBracket, "expected '[' in type vector", sync)?;
                     let rbracket = self.expect_with_sync(&Token::RBracket, "expected ']' in type vector", sync)?;
-                    return Some((TypeExpr::Vector(Box::new(TypeExpr::Named(name))), rbracket.span));
+                    ty = TypeExpr::Vector(Box::new(ty));
+                    last_span = rbracket.span;
                 }
-
-                // Simple named type
-                Some((TypeExpr::Named(name), name_span))
+                Some((ty, last_span))
             }
             Token::LParen => {
                 self.error_no_sync("expected type expression");
@@ -1149,6 +1333,10 @@ impl<'src> Parser<'src> {
             Expr::Let { bindings, body, .. } => Expr::Let { bindings, body, span: new_span },
             Expr::Assign { target, value, .. } => Expr::Assign { target, value, span: new_span },
             Expr::Block { exprs, .. } => Expr::Block { exprs, span: new_span },
+            Expr::VectorLit { elements, .. } => Expr::VectorLit { elements, span: new_span },
+            Expr::VectorSized { elem_ty, size, init, .. } => Expr::VectorSized { elem_ty, size, init, span: new_span },
+            Expr::VectorComp { body, var, iterable, .. } => Expr::VectorComp { body, var, iterable, span: new_span },
+            Expr::Index { object, index, .. } => Expr::Index { object, index, span: new_span },
             Expr::Error { .. } => Expr::Error { span: new_span },
         }
     }
@@ -1678,6 +1866,10 @@ impl HasSpan for Expr {
             Expr::Let { span, .. } => *span,
             Expr::Assign { span, .. } => *span,
             Expr::Block { span, .. } => *span,
+            Expr::VectorLit { span, .. } => *span,
+            Expr::VectorSized { span, .. } => *span,
+            Expr::VectorComp { span, .. } => *span,
+            Expr::Index { span, .. } => *span,
             Expr::Error { span } => *span,
         }
     }

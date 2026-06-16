@@ -844,7 +844,9 @@ impl SemanticChecker {
                 } else {
                     // Try to resolve method from the static type of the object
                     if let Some(obj_ty) = self.infer_simple_type(object) {
-                        if let Some(signature) = self.method_signature_for_simple_type(&obj_ty, method, args.len()).cloned() {
+                        if matches!(&obj_ty, SimpleType::Vector(_)) && is_builtin_vector_method(method, args.len()) {
+                            // size()/next()/current()/iter() on a vector — builtin, fine.
+                        } else if let Some(signature) = self.method_signature_for_simple_type(&obj_ty, method, args.len()).cloned() {
                             self.check_callable_args(method, args, &signature.params, "method", *span);
                         } else {
                             // No such method — applies equally to user types and the
@@ -909,6 +911,27 @@ impl SemanticChecker {
 
                 let left_ty = self.infer_simple_type(left);
                 let right_ty = self.infer_simple_type(right);
+
+                // Operator overloading (extension): when the left operand is a user
+                // type that defines the operator's method (e.g. `plus` for `+`), the
+                // operator dispatches to that method and the builtin operand rules do
+                // not apply — only the right operand must conform to the method param.
+                if let Some(method) = op.operator_method() {
+                    if let Some(SimpleType::Named(type_name)) = &left_ty {
+                        if let Some(signature) =
+                            self.ctx.type_method_signature(type_name, method, 1).cloned()
+                        {
+                            self.check_callable_args(
+                                method,
+                                std::slice::from_ref(right.as_ref()),
+                                &signature.params,
+                                "operator",
+                                *span,
+                            );
+                            return;
+                        }
+                    }
+                }
 
                 match op {
                     BinOp::And | BinOp::Or => {
@@ -1109,6 +1132,55 @@ impl SemanticChecker {
                     }
                 });
             }
+            Expr::VectorLit { elements, .. } => {
+                for element in elements {
+                    self.check_expr(element);
+                }
+            }
+            Expr::VectorSized { elem_ty, size, init, span } => {
+                self.check_type_expr(elem_ty, *span);
+                self.check_expr(size);
+                if let Some(ct) = self.infer_simple_type(size) {
+                    if ct != SimpleType::Number {
+                        self.report(expr_span(size), format!(
+                            "array size must be Number (found {})",
+                            ct.display_name()
+                        ));
+                    }
+                }
+                if let Some((var, body)) = init {
+                    self.with_scope(|this| {
+                        this.define_var(var, *span);
+                        this.ctx.set_var_type(var, SimpleType::Number);
+                        this.check_expr(body);
+                    });
+                }
+            }
+            Expr::VectorComp { body, var, iterable, .. } => {
+                self.check_expr(iterable);
+                if !self.is_iterable_expr(iterable) {
+                    self.report(expr_span(iterable), "expression is not iterable".to_string());
+                }
+                self.with_scope(|this| {
+                    this.define_var(var, expr_span(body));
+                    if let Some(element_ty) = this.infer_iterable_element_type(iterable) {
+                        this.ctx.set_var_type(var, element_ty);
+                    }
+                    this.check_expr(body);
+                });
+            }
+            Expr::Index { object, index, .. } => {
+                self.check_expr(object);
+                self.check_expr(index);
+                if let Some(it) = self.infer_simple_type(index) {
+                    if it != SimpleType::Number {
+                        self.report(expr_span(index), format!(
+                            "array index must be Number (found {})",
+                            it.display_name()
+                        ));
+                    }
+                }
+            }
             Expr::Let { bindings, body, span } => {
                 if bindings.is_empty() {
                     self.report(*span, "let with no bindings".to_string());
@@ -1220,6 +1292,11 @@ impl SemanticChecker {
             }
 
             Expr::FieldAccess { .. } => {
+                self.check_expr(target);
+            }
+
+            // `a[i] := v` — indexed assignment into a vector.
+            Expr::Index { .. } => {
                 self.check_expr(target);
             }
 
@@ -1431,6 +1508,26 @@ impl SemanticChecker {
             Expr::Assign { value, .. } => self.infer_simple_type(value),
             Expr::Block { exprs, .. } => exprs.last().and_then(|expr| self.infer_simple_type(expr)),
 
+            Expr::VectorLit { elements, .. } => {
+                let mut acc: Option<SimpleType> = None;
+                for element in elements {
+                    let t = self.infer_simple_type(element)?;
+                    acc = Some(match acc {
+                        Some(a) => self.ctx.lowest_common_ancestor(&a, &t),
+                        None => t,
+                    });
+                }
+                acc.map(|t| SimpleType::Vector(Box::new(t)))
+            }
+            Expr::VectorSized { elem_ty, .. } => {
+                simple_type_from_type_expr(elem_ty).map(|t| SimpleType::Vector(Box::new(t)))
+            }
+            Expr::VectorComp { .. } => None,
+            Expr::Index { object, .. } => match self.infer_simple_type(object)? {
+                SimpleType::Vector(inner) => Some(*inner),
+                _ => None,
+            },
+
             Expr::MethodCall { object, method, args, .. } => {
                 // self.method(...)
                 if matches!(**object, Expr::Ident { ref name, .. } if name == "self") {
@@ -1441,6 +1538,15 @@ impl SemanticChecker {
                 }
                 // If the object has a named static type, try to resolve the method signature
                 if let Some(obj_ty) = self.infer_simple_type(object) {
+                    // Builtin vector methods: size(): Number, current(): T, next(): Boolean.
+                    if let SimpleType::Vector(inner) = &obj_ty {
+                        match (method.as_str(), args.len()) {
+                            ("size", 0) => return Some(SimpleType::Number),
+                            ("next", 0) => return Some(SimpleType::Boolean),
+                            ("current", 0) => return Some((**inner).clone()),
+                            _ => {}
+                        }
+                    }
                     return self
                         .method_signature_for_simple_type(&obj_ty, method, args.len())
                         .and_then(|s| s.return_type.clone());
@@ -1459,6 +1565,14 @@ impl SemanticChecker {
 
             Expr::BinaryOp { op, left, right, .. } => {
                 let left_ty = self.infer_simple_type(left)?;
+                // Operator overloading: result type is the operator method's return type.
+                if let Some(method) = op.operator_method() {
+                    if let SimpleType::Named(type_name) = &left_ty {
+                        if let Some(signature) = self.ctx.type_method_signature(type_name, method, 1) {
+                            return signature.return_type.clone();
+                        }
+                    }
+                }
                 let right_ty = self.infer_simple_type(right)?;
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
@@ -1795,6 +1909,13 @@ impl SemanticChecker {
             }
             Expr::BinaryOp { op, left, right, .. } => {
                 let left_ty = self.infer_expr_with_scopes(left, ctx)?;
+                if let Some(method) = op.operator_method() {
+                    if let SimpleType::Named(type_name) = &left_ty {
+                        if let Some(signature) = ctx.type_method_signature(type_name, method, 1) {
+                            return signature.return_type.clone();
+                        }
+                    }
+                }
                 let right_ty = self.infer_expr_with_scopes(right, ctx)?;
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
@@ -1913,6 +2034,25 @@ impl SemanticChecker {
                 }
                 result
             }
+            Expr::VectorLit { elements, .. } => {
+                let mut acc: Option<SimpleType> = None;
+                for element in elements {
+                    let t = self.infer_expr_with_scopes(element, ctx)?;
+                    acc = Some(match acc {
+                        Some(a) => self.ctx.lowest_common_ancestor(&a, &t),
+                        None => t,
+                    });
+                }
+                acc.map(|t| SimpleType::Vector(Box::new(t)))
+            }
+            Expr::VectorSized { elem_ty, .. } => {
+                simple_type_from_type_expr(elem_ty).map(|t| SimpleType::Vector(Box::new(t)))
+            }
+            Expr::VectorComp { .. } => None,
+            Expr::Index { object, .. } => match self.infer_expr_with_scopes(object, ctx)? {
+                SimpleType::Vector(inner) => Some(*inner),
+                _ => None,
+            },
             Expr::Error { .. } => None,
             Expr::IsType { .. } => Some(SimpleType::Boolean),
             Expr::Base { .. } => self.infer_simple_type(expr),
@@ -1992,6 +2132,12 @@ fn callable_params_from_sig_params(params: &[SigParam]) -> Vec<Option<SimpleType
 /// Is this a placeholder name produced by the parser?
 fn is_placeholder(name: &str) -> bool {
     name.is_empty() || name == "__parse_error__"
+}
+
+/// Builtin methods every vector exposes (A.12): `size()` plus the iterator
+/// protocol it implements (`next`/`current`/`iter`).
+fn is_builtin_vector_method(method: &str, arity: usize) -> bool {
+    matches!((method, arity), ("size", 0) | ("next", 0) | ("current", 0) | ("iter", 0))
 }
 
 /// Walk `e` collecting structural method requirements on `param` for A.9.5 protocol
@@ -2130,6 +2276,10 @@ fn expr_span(expr: &Expr) -> Span {
         Expr::Let { span, .. } => *span,
         Expr::Assign { span, .. } => *span,
         Expr::Block { span, .. } => *span,
+        Expr::VectorLit { span, .. } => *span,
+        Expr::VectorSized { span, .. } => *span,
+        Expr::VectorComp { span, .. } => *span,
+        Expr::Index { span, .. } => *span,
         Expr::Error { span } => *span,
     }
 }

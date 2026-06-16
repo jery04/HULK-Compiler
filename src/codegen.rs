@@ -484,6 +484,12 @@ impl<'a> Codegen<'a> {
                         self.emit(&format!("{}.obj->fields[{}] = {};", o, slot, val));
                         val
                     }
+                    Expr::Index { object, index, .. } => {
+                        let o = self.gen_expr(object);
+                        let i = self.gen_expr(index);
+                        self.emit(&format!("vec_set({}, {}, {});", o, i, val));
+                        val
+                    }
                     _ => val,
                 }
             }
@@ -505,10 +511,18 @@ impl<'a> Codegen<'a> {
                 let argv = self.gen_args(args);
                 let slot = *self.method_slots.get(method).unwrap_or(&0);
                 let t = self.fresh();
-                self.emit(&format!(
-                    "Value {} = vtables[{}.obj->type_id][{}]({}, {});",
-                    t, o, slot, o, argv
-                ));
+                if method == "size" && args.is_empty() {
+                    // `size()` is builtin on vectors; user types may also define it.
+                    self.emit(&format!(
+                        "Value {} = ({}.tag == TAG_VEC) ? vec_size({}) : vtables[{}.obj->type_id][{}]({}, {});",
+                        t, o, o, o, slot, o, argv
+                    ));
+                } else {
+                    self.emit(&format!(
+                        "Value {} = vtables[{}.obj->type_id][{}]({}, {});",
+                        t, o, slot, o, argv
+                    ));
+                }
                 t
             }
             Expr::Call { callee, args, .. } => self.gen_call(callee, args),
@@ -550,56 +564,59 @@ impl<'a> Codegen<'a> {
             Expr::For { var, iterable, body, .. } => {
                 let result = self.fresh();
                 self.emit(&format!("Value {} = mk_num(0);", result));
-
-                // `for (x in range(lo, hi))` lowers to a counted loop.
-                if let Expr::Call { callee, args, .. } = &**iterable {
-                    if let Expr::Ident { name, .. } = &**callee {
-                        if name == "range" && args.len() == 2 {
-                            let lo = self.gen_expr(&args[0]);
-                            let hi = self.gen_expr(&args[1]);
-                            let idx = self.fresh();
-                            self.emit(&format!(
-                                "for (double {i} = {lo}.num; {i} < {hi}.num; {i} += 1.0) {{",
-                                i = idx, lo = lo, hi = hi
-                            ));
-                            self.scopes.push(HashMap::new());
-                            let xv = self.new_var(var);
-                            self.emit(&format!("Value {} = mk_num({});", xv, idx));
-                            let _ = self.gen_expr(body);
-                            self.scopes.pop();
-                            self.emit("}");
-                            return result;
-                        }
-                    }
-                }
-
-                // General iterable object: drive the HULK iterator protocol
-                // `next(): Boolean` / `current(): T` through dynamic dispatch. If the
-                // object has no `next` it is treated as Enumerable: call `iter()` to
-                // obtain a fresh iterator first (A.11.3).
-                let it0 = self.gen_expr(iterable);
-                let snext = self.method_slots["next"];
-                let scur = self.method_slots["current"];
-                let siter = self.method_slots["iter"];
-                let it = self.fresh();
-                self.emit(&format!(
-                    "Value {it} = (vtables[{o}.obj->type_id][{sn}] == 0) ? vtables[{o}.obj->type_id][{si}]({o}, NULL) : {o};",
-                    it = it, o = it0, sn = snext, si = siter
-                ));
-                self.emit(&format!(
-                    "while (vtables[{it}.obj->type_id][{sn}]({it}, NULL).b) {{",
-                    it = it, sn = snext
-                ));
-                self.scopes.push(HashMap::new());
-                let xv = self.new_var(var);
-                self.emit(&format!(
-                    "Value {} = vtables[{it}.obj->type_id][{sc}]({it}, NULL);",
-                    xv, it = it, sc = scur
-                ));
-                let _ = self.gen_expr(body);
-                self.scopes.pop();
-                self.emit("}");
+                self.gen_iter_loop(var, iterable, |this| {
+                    let _ = this.gen_expr(body);
+                });
                 result
+            }
+            Expr::VectorLit { elements, .. } => {
+                let vals: Vec<String> = elements.iter().map(|e| self.gen_expr(e)).collect();
+                let t = self.fresh();
+                if vals.is_empty() {
+                    self.emit(&format!("Value {} = mk_vec(0);", t));
+                } else {
+                    let arr = self.fresh();
+                    self.emit(&format!("Value {}[{}];", arr, vals.len()));
+                    for (i, v) in vals.iter().enumerate() {
+                        self.emit(&format!("{}[{}] = {};", arr, i, v));
+                    }
+                    self.emit(&format!("Value {} = vec_lit({}, {});", t, vals.len(), arr));
+                }
+                t
+            }
+            Expr::VectorSized { size, init, .. } => {
+                let sz = self.gen_expr(size);
+                let t = self.fresh();
+                self.emit(&format!("Value {} = mk_vec((long){}.num);", t, sz));
+                if let Some((var, body)) = init {
+                    let idx = self.fresh();
+                    self.emit(&format!("for (long {i} = 0; {i} < {t}.vec->len; {i}++) {{", i = idx, t = t));
+                    self.scopes.push(HashMap::new());
+                    let xv = self.new_var(var);
+                    self.emit(&format!("Value {} = mk_num((double){});", xv, idx));
+                    let bv = self.gen_expr(body);
+                    self.emit(&format!("{}.vec->data[{}] = {};", t, idx, bv));
+                    self.scopes.pop();
+                    self.emit("}");
+                }
+                t
+            }
+            Expr::VectorComp { body, var, iterable, .. } => {
+                let result = self.fresh();
+                self.emit(&format!("Value {} = mk_vec(0);", result));
+                let sink = result.clone();
+                self.gen_iter_loop(var, iterable, |this| {
+                    let bv = this.gen_expr(body);
+                    this.emit(&format!("vec_append(&{}, {});", sink, bv));
+                });
+                result
+            }
+            Expr::Index { object, index, .. } => {
+                let o = self.gen_expr(object);
+                let i = self.gen_expr(index);
+                let t = self.fresh();
+                self.emit(&format!("Value {} = vec_index({}, {});", t, o, i));
+                t
             }
             Expr::Error { .. } => {
                 let t = self.fresh();
@@ -607,6 +624,61 @@ impl<'a> Codegen<'a> {
                 t
             }
         }
+    }
+
+    /// Emit a HULK iteration loop binding `var` to each element of `iterable`,
+    /// then run `body` once inside the loop. Handles `range(a,b)` as a counted
+    /// loop, vectors by index, and any other object via the iterator protocol
+    /// (with the Enumerable `iter()` fallback).
+    fn gen_iter_loop<F: FnOnce(&mut Self)>(&mut self, var: &str, iterable: &Expr, body: F) {
+        if let Expr::Call { callee, args, .. } = iterable {
+            if let Expr::Ident { name, .. } = &**callee {
+                if name == "range" && args.len() == 2 {
+                    let lo = self.gen_expr(&args[0]);
+                    let hi = self.gen_expr(&args[1]);
+                    let idx = self.fresh();
+                    self.emit(&format!(
+                        "for (double {i} = {lo}.num; {i} < {hi}.num; {i} += 1.0) {{",
+                        i = idx, lo = lo, hi = hi
+                    ));
+                    self.scopes.push(HashMap::new());
+                    let xv = self.new_var(var);
+                    self.emit(&format!("Value {} = mk_num({});", xv, idx));
+                    body(self);
+                    self.scopes.pop();
+                    self.emit("}");
+                    return;
+                }
+            }
+        }
+
+        let it0 = self.gen_expr(iterable);
+        let snext = self.method_slots["next"];
+        let scur = self.method_slots["current"];
+        let siter = self.method_slots["iter"];
+        let iter = self.fresh();
+        let idx = self.fresh();
+        // Resolve the iterator once: objects without `next` are Enumerable (call iter()).
+        self.emit(&format!(
+            "Value {iter}; if ({o}.tag == TAG_OBJ) {{ {iter} = (vtables[{o}.obj->type_id][{sn}] == 0) ? vtables[{o}.obj->type_id][{si}]({o}, NULL) : {o}; }} else {{ {iter} = {o}; }}",
+            iter = iter, o = it0, sn = snext, si = siter
+        ));
+        self.emit(&format!("long {} = 0;", idx));
+        self.emit("while (1) {");
+        self.scopes.push(HashMap::new());
+        let xv = self.new_var(var);
+        self.emit(&format!("Value {};", xv));
+        self.emit(&format!(
+            "if ({o}.tag == TAG_VEC) {{ if ({idx} >= {o}.vec->len) break; {xv} = {o}.vec->data[{idx}]; {idx}++; }}",
+            o = it0, idx = idx, xv = xv
+        ));
+        self.emit(&format!(
+            "else {{ if (!vtables[{it}.obj->type_id][{sn}]({it}, NULL).b) break; {xv} = vtables[{it}.obj->type_id][{sc}]({it}, NULL); }}",
+            it = iter, sn = snext, sc = scur, xv = xv
+        ));
+        body(self);
+        self.scopes.pop();
+        self.emit("}");
     }
 
     fn gen_args(&mut self, args: &[Expr]) -> String {
@@ -674,7 +746,7 @@ impl<'a> Codegen<'a> {
         let a = self.gen_expr(left);
         let b = self.gen_expr(right);
         let t = self.fresh();
-        let call = match op {
+        let builtin = match op {
             BinOp::Add => format!("hulk_add({}, {})", a, b),
             BinOp::Sub => format!("hulk_sub({}, {})", a, b),
             BinOp::Mul => format!("hulk_mul({}, {})", a, b),
@@ -692,7 +764,20 @@ impl<'a> Codegen<'a> {
             BinOp::Concat => format!("hulk_concat({}, {}, 0)", a, b),
             BinOp::ConcatSpace => format!("hulk_concat({}, {}, 1)", a, b),
         };
-        self.emit(&format!("Value {} = {};", t, call));
+        // Operator overloading (extension): if some user type defines the operator's
+        // method, dispatch on object operands at runtime; otherwise use the builtin.
+        if let Some(method) = op.operator_method() {
+            if let Some(&slot) = self.method_slots.get(method) {
+                let argb = self.fresh();
+                self.emit(&format!("Value {a}[1]; {a}[0] = {b};", a = argb, b = b));
+                self.emit(&format!(
+                    "Value {t} = ({a}.tag == TAG_OBJ) ? vtables[{a}.obj->type_id][{slot}]({a}, {argb}) : {builtin};",
+                    t = t, a = a, slot = slot, argb = argb, builtin = builtin
+                ));
+                return t;
+            }
+        }
+        self.emit(&format!("Value {} = {};", t, builtin));
         t
     }
 }
@@ -734,14 +819,39 @@ const RUNTIME_PREAMBLE: &str = r#"#include <stdio.h>
 #define TAG_STR 1
 #define TAG_BOOL 2
 #define TAG_OBJ 3
+#define TAG_VEC 4
 
 typedef struct Obj Obj;
-typedef struct { int tag; double num; char* str; int b; Obj* obj; } Value;
+typedef struct Vec Vec;
+typedef struct { int tag; double num; char* str; int b; Obj* obj; Vec* vec; } Value;
 struct Obj { int type_id; Value* fields; };
+struct Vec { long len; Value* data; };
 
-static Value mk_num(double n){ Value v; v.tag=TAG_NUM; v.num=n; v.str=0; v.b=0; v.obj=0; return v; }
-static Value mk_bool(int b){ Value v; v.tag=TAG_BOOL; v.b=b; v.num=0; v.str=0; v.obj=0; return v; }
-static Value mk_str(const char* s){ Value v; v.tag=TAG_STR; v.str=(char*)s; v.num=0; v.b=0; v.obj=0; return v; }
+static Value mk_num(double n){ Value v; v.tag=TAG_NUM; v.num=n; v.str=0; v.b=0; v.obj=0; v.vec=0; return v; }
+static Value mk_bool(int b){ Value v; v.tag=TAG_BOOL; v.b=b; v.num=0; v.str=0; v.obj=0; v.vec=0; return v; }
+static Value mk_str(const char* s){ Value v; v.tag=TAG_STR; v.str=(char*)s; v.num=0; v.b=0; v.obj=0; v.vec=0; return v; }
+
+static Value mk_vec(long n){
+    Vec* vc = (Vec*)malloc(sizeof(Vec));
+    vc->len = n < 0 ? 0 : n;
+    vc->data = (Value*)calloc(vc->len > 0 ? vc->len : 1, sizeof(Value));
+    for (long i = 0; i < vc->len; i++) vc->data[i] = mk_num(0);
+    Value v; v.tag=TAG_VEC; v.num=0; v.str=0; v.b=0; v.obj=0; v.vec=vc; return v;
+}
+static Value vec_lit(long n, Value* elems){
+    Value v = mk_vec(n);
+    for (long i = 0; i < n; i++) v.vec->data[i] = elems[i];
+    return v;
+}
+static Value vec_index(Value v, Value i){ return v.vec->data[(long)i.num]; }
+static void  vec_set(Value v, Value i, Value x){ v.vec->data[(long)i.num] = x; }
+static Value vec_size(Value v){ return mk_num((double)v.vec->len); }
+static void  vec_append(Value* v, Value x){
+    Vec* vc = v->vec;
+    vc->data = (Value*)realloc(vc->data, (vc->len + 1) * sizeof(Value));
+    vc->data[vc->len] = x;
+    vc->len++;
+}
 
 static char* num_to_str(double n){
     char* buf = (char*)malloc(32);

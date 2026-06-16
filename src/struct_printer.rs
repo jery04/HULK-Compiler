@@ -898,6 +898,58 @@ fn print_expr(expr: &Expr, printer: &TreePrinter) {
             let span_printer = printer.child(true);
             print_span(*span, &span_printer);
         }
+        Expr::VectorLit { elements, span } => {
+            printer.line("VectorLit");
+            let elems_printer = printer.child(false);
+            elems_printer.line("elements");
+            for (idx, e) in elements.iter().enumerate() {
+                let child = elems_printer.child(idx + 1 == elements.len());
+                print_expr(e, &child);
+            }
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
+        Expr::VectorSized { size, init, span, .. } => {
+            printer.line("VectorSized");
+            let size_printer = printer.child(false);
+            size_printer.line("size");
+            let size_child = size_printer.child(true);
+            print_expr(size, &size_child);
+            if let Some((var, body)) = init {
+                let init_printer = printer.child(false);
+                init_printer.line(&format!("init({} ->)", var));
+                let init_child = init_printer.child(true);
+                print_expr(body, &init_child);
+            }
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
+        Expr::VectorComp { body, var, iterable, span } => {
+            printer.line(&format!("VectorComp(var={})", var));
+            let body_printer = printer.child(false);
+            body_printer.line("body");
+            let body_child = body_printer.child(true);
+            print_expr(body, &body_child);
+            let it_printer = printer.child(false);
+            it_printer.line("iterable");
+            let it_child = it_printer.child(true);
+            print_expr(iterable, &it_child);
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
+        Expr::Index { object, index, span } => {
+            printer.line("Index");
+            let obj_printer = printer.child(false);
+            obj_printer.line("object");
+            let obj_child = obj_printer.child(true);
+            print_expr(object, &obj_child);
+            let idx_printer = printer.child(false);
+            idx_printer.line("index");
+            let idx_child = idx_printer.child(true);
+            print_expr(index, &idx_child);
+            let span_printer = printer.child(true);
+            print_span(*span, &span_printer);
+        }
         Expr::Error { span } => {
             printer.line("ErrorExpr");
             let span_printer = printer.child(true);

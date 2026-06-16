@@ -1,0 +1,23 @@
+// Extension: operator overloading via structural protocols.
+// `a OP b` dispatches to a method on a's type (plus/minus/mult/div/equals/...),
+// while built-in numeric/string operators keep working unchanged.
+
+type Vec2(x: Number, y: Number) {
+    x = x;
+    y = y;
+    plus(o: Vec2): Vec2 => new Vec2(self.x + o.x, self.y + o.y);
+    minus(o: Vec2): Vec2 => new Vec2(self.x - o.x, self.y - o.y);
+    mult(k: Number): Vec2 => new Vec2(self.x * k, self.y * k);
+    equals(o: Vec2): Boolean => self.x == o.x & self.y == o.y;
+    norm2(): Number => self.x * self.x + self.y * self.y;
+}
+
+let a = new Vec2(1, 2) in
+let b = new Vec2(3, 4) in {
+    print((a + b).x);          // 4
+    print((b - a).y);          // 2
+    print((a * 3).x);          // 3
+    print((a + b).norm2());    // 52
+    if (a + b == new Vec2(4, 6)) print("equal") else print("different");
+    print(2 + 3 * 4);          // 14  (built-in arithmetic is untouched)
+}

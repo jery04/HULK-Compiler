@@ -1,0 +1,24 @@
+// Extra features A.9 (type inference) + A.10 (protocols), coupled.
+// `h`'s parameter is unannotated; because it is used as a method receiver with
+// `@@`, the inferer SYNTHESIZES a protocol { f(): String; g(): String } and binds
+// the parameter to it, so `A` structurally conforms and the program type-checks.
+
+type A {
+    f(): String => "Hello";
+    g(): String => "World";
+}
+
+// Structural protocol used as an explicit annotation (interface == protocol).
+protocol Greeter { greet(): String; }
+type Spanish(name: String) {
+    name = name;
+    greet(): String => "Hola, " @ self.name;
+}
+
+function h(x) => x.f() @@ x.g();              // x : synthesized protocol
+function welcome(g: Greeter): String => g.greet() @ "!";
+
+{
+    print(h(new A()));                        // Hello World
+    print(welcome(new Spanish("Mundo")));     // Hola, Mundo!
+}

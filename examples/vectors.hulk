@@ -1,0 +1,29 @@
+// Feature A.12: vectors. A single runtime vector type with several surface
+// syntaxes — the documented `[..]`/comprehension forms and the Java-like
+// `new T[n]` / `{..}` / index-initializer forms — plus indexing, size() and
+// iteration (vectors implement the iterable protocol).
+
+let primes = [2, 3, 5, 7, 11] in {          // doc literal
+    print(primes[0]);                        // 2
+    print(primes.size());                    // 5
+
+    let total = 0 in {                       // iterate with for
+        for (p in primes) total := total + p;
+        print(total);                        // 28
+    };
+
+    let squares = new Number[5]{ i -> i * i } in  // sized + index initializer
+        print(squares[4]);                   // 16
+
+    let row = {10, 20, 30} in                // Matcom literal (curly braces)
+        print(row[1]);                       // 20
+
+    let evens = [2 * n | n in range(1, 4)] in // comprehension
+        print(evens[2]);                     // 6
+
+    let grid: Number[][] = new Number[][2] in {  // 2-D array
+        grid[0] := new Number[2];
+        grid[0][1] := 42;
+        print(grid[0][1]);                   // 42
+    };
+}
