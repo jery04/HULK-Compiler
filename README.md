@@ -1,241 +1,219 @@
-# HULKForge — Compilador del Lenguaje HULK
+# ⚒️ HULKForge
 
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-Academic-blue.svg)](#licencia)
-![Status](https://img.shields.io/badge/status-In%20Development-yellow.svg)
+**A compiler for the HULK language, written in Rust.**
 
-**HULKForge** es la implementación de un compilador para **HULK** (Havana University Language Kompilation).
+HULKForge is an end-to-end compiler that takes a program in the HULK language
+(*Havana University Language Kompilation*) and produces a native binary, going
+through the four classical phases: lexical analysis, syntactic analysis,
+semantic analysis, and C code generation.
 
-Esta rama contiene la primera fase: el **Lexer (análisis léxico)**.
+The project is structured as a single-pass monolithic pipeline: each phase
+consumes the output of the previous one and halts the flow as soon as it
+detects the first error, emitting a diagnostic in the format
+`(line, column) TYPE: message` and an exit code that identifies the failing
+phase (`1` lexical, `2` syntactic, `3` semantic, `0` success).
 
 ---
 
-## Instalación de dependencias
+## Project structure
 
-### Requisitos previos
-- **Rust 1.70+** ([descargar](https://rustup.rs/))
-- **Cargo** (incluido con Rust)
+```
+HulkForge/
+│
+├── Cargo.toml                 # Rust manifest: dependencies and metadata
+├── Cargo.lock                 # Pinned dependency versions
+├── Makefile                   # `make build` -> leaves ./hulk at the root
+├── run_linux_tests.sh         # Test harness for Linux/macOS
+├── run_local_tests.sh         # Test harness for Windows/MinGW
+├── README.md
+│
+├── examples/                  # Sample HULK programs
+│   ├── vectors.hulk
+│   ├── operator_overloading.hulk
+│   ├── compound_assignment.hulk
+│   └── inference_protocols.hulk
+│
+└── src/                       # Compiler source code
+    │
+    ├── main.rs                # CLI driver: orchestrates the 4 phases
+    │
+    ├── lexer/                 # ── Phase 1: Lexical analysis ──
+    │   ├── mod.rs             #    Module declaration
+    │   ├── lexer.rs           #    Token enum, TokenStream, Span, LexError
+    │   └── test.rs            #    Lexer unit tests
+    │
+    ├── parser/                # ── Phase 2: Syntactic analysis ──
+    │   ├── mod.rs             #    Module declaration
+    │   ├── ast.rs             #    Typed AST definitions
+    │   ├── parser.rs          #    Hand-written recursive-descent LL(1) parser
+    │   └── tests.rs           #    Parser unit tests
+    │
+    ├── semantic/              # ── Phase 3: Semantic analysis ──
+    │   ├── mod.rs             #    Module declaration
+    │   ├── context.rs         #    Context: scopes, type/function registries
+    │   ├── checker.rs         #    Type validation and inference visitor
+    │   └── tests.rs           #    Checker unit tests
+    │
+    ├── codegen.rs             # ── Phase 4: AST lowering to C ──
+    │
+    ├── evaluator/             # Frozen experimental probe (unused in prod)
+    └── struct_printer.rs      # AST pretty-printer for debugging
+```
 
-### Pasos iniciales
+### Module roles
 
-Después de clonar el repositorio, ejecuta:
+| Module         | Role in the pipeline                                                                   |
+|----------------|----------------------------------------------------------------------------------------|
+| `lexer/`       | Tokenizes the source with Logos (DFA compiled at build time). Reports invalid characters and malformed strings. |
+| `parser/`      | Builds a typed AST via recursive-descent LL(1). Handles errors with `ParseError { span, message }`. |
+| `semantic/`    | Walks the AST validating types, scopes, inheritance and structural protocols. Performs limited type inference. |
+| `codegen.rs`   | Lowers the verified AST into C code with a tagged-value runtime and per-type vtables. Delegates to `cc`/`gcc`/`clang` to produce the final binary. |
+| `main.rs`      | Reads the source file, runs the phases in order, and emits diagnostics. Defines the exit-code contract (0/1/2/3). |
+
+---
+
+## How to run the project
+
+### Prerequisites
+
+HULKForge requires two tools installed on the system:
+
+| Tool                | Min. version | Purpose                              |
+|---------------------|--------------|--------------------------------------|
+| **Rust**            | 1.70+        | Compile the compiler                 |
+| **C compiler**      | any          | Compile the C output to a native bin |
+
+The C compiler can be `cc`, `gcc`, or `clang` — HULKForge tries them in that
+order and uses the first one it finds. On Ubuntu/Debian install with:
 
 ```bash
-# Descargar e instalar las dependencias del proyecto
-cargo update
-
-# Compilar en modo debug
-cargo build
-
-# Compilar en modo release (optimizado)
-cargo build --release
+sudo apt install build-essential
 ```
 
----
+### Dependency installation
 
-## Descripción del Lexer
+Rust dependencies are declared in `Cargo.toml` and **managed automatically by
+Cargo** — no manual installation and no `requirements.txt`-style file is
+needed. On the first `cargo build`, Cargo downloads and compiles `logos`
+(lexer), `thiserror` (error types), and `indexmap` (ordered maps).
 
-El lexer es la primera etapa del compilador. Convierte el código fuente en **tokens** (unidades léxicas).
-
-### Características principales
-
-- **Maximal Munch**: Reconoce los tokens más largos posibles (ej: `@@` como un solo token)
-- **Posiciones precisas**: Cada token incluye línea y columna (base-1) para reportes de error puntuales
-- **Recuperación de errores**: Continúa tokenizando tras encontrar caracteres inválidos, permitiendo reportar todos los errores a la vez
-- **Números como strings**: Almacena números como `String` para permitir validación precisa en el parser (overflow detection, rango, formato)
-- **Identificadores internos**: Soporta `_ident` para código generado internamente por el compilador en transpilaciones
-- **Escapes en strings**: Soporta secuencias de escape estándar: `\"`, `\n`, `\t`, `\\`
-- **Comentarios de línea**: Ignora automáticamente comentarios (`// ...`) sin generar tokens
-- **Manejo de EOF**: Garantiza que el último token siempre es `Eof`, facilitando el uso en el parser
-- **Velocidad**: Logos genera un lexer altamente optimizado basado en DFAs compilados
-- **Confiabilidad**: El lexer evita panics explícitos y reporta errores mediante validación
-
-### Tokens soportados
-
-- **Palabras clave**: `let`, `if`, `function`, `type`, `while`, etc.
-- **Operadores**: `+`, `-`, `*`, `/`, `@` (concatenación), `@@` (con espacio), `:=`, `=>`, etc.
-- **Literales**: números (`"3.14"` como string), strings con escapes (`\"`, `\n`, `\t`, `\\`)
-- **Identificadores**: `x`, `camelCase`, `snake_case`, etc.
-- **Puntuación**: `(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, etc.
-
-### Ejemplo de tokenización
-
-**Código fuente:**
-
-```hulk
-let x = 42 in print(x);
-```
-
-**Salida léxica:**
-
-```
-Let                    (línea 1, col 1)
-Ident("x")             (línea 1, col 5)
-Eq                     (línea 1, col 7)
-Number("42")           (línea 1, col 9)
-In                     (línea 1, col 12)
-Ident("print")         (línea 1, col 15)
-LParen                 (línea 1, col 20)
-Ident("x")             (línea 1, col 21)
-RParen                 (línea 1, col 22)
-Semicolon              (línea 1, col 23)
-Eof                    (línea 1, col 24)
-```
-
-**Ejemplo con error:**
-
-```hulk
-let x = #42;
-```
-
-**Salida:**
-
-```
-Let
-Ident("x")
-Eq
-[LexError] carácter inesperado: '#'  (línea 1, col 9)
-Number("42")    // El lexer continúa tras el error
-Semicolon
-Eof
-```
-
-### Estructura actual
-
-La estructura del proyecto en esta fase es:
-
-```
-src/
-├── main.rs              # Punto de entrada (vacío)
-└── lexer/
-    ├── mod.rs           # Declaración del módulo lexer
-    ├── lexer.rs         # Implementación del lexer
-    └── test.rs          # Suite de tests
-```
-
-**Nota**: Esta estructura evolucionará con el parser (`parser/`), type-checker (`semantic/`), y generador de código (`codegen/`).
-
----
-
-## Ejecutar los tests
+If you need to pre-download dependencies (e.g. for an offline environment), run
+once on a connected machine:
 
 ```bash
-# Ejecutar todos los tests
-cargo test
-
-# Ejecutar un test específico por nombre
-cargo test keywords
-
-# Ejecutar tests en modo verbose
-cargo test -- --nocapture
-
-# Ejecutar tests sin paralelización
-cargo test -- --test-threads=1
+cargo fetch                    # downloads all deps into the local cargo cache
 ```
 
-### Cobertura de tests
+### Step-by-step
 
-La suite incluye amplia cobertura unitaria:
-- ✅ Palabras clave del lenguaje
-- ✅ Operadores de uno y múltiples caracteres
-- ✅ Números enteros y flotantes
-- ✅ Strings con secuencias de escape
-- ✅ Identificadores e identificadores internos (`_ident`)
-- ✅ Posicionamiento (línea/columna)
-- ✅ Manejo de errores y recuperación
-- ✅ Comentarios (`//`)
-- ✅ EOF (fin de archivo)
-- ✅ Programas completos
-
----
-
-## Compilación
+#### 1. Clone the repository and switch to the active branch
 
 ```bash
-# Modo debug (rápido de compilar, lento de ejecutar)
-cargo build
+git clone https://github.com/JosuSC/HulkForge.git
+cd HulkForge
+git checkout semantic          # branch under active development
+```
 
-# Modo release (lento de compilar, rápido de ejecutar)
-cargo build --release
+#### 2. Build the compiler
 
-# Ejecutar el binario compilado
-./target/debug/hulk_forge      # Debug
-./target/release/hulk_forge    # Release
+```bash
+cargo build --release          # produces target/release/hulk_forge
+make build                     # alias: copies the binary to ./hulk at the root
+```
+
+Verify it works:
+
+```bash
+./hulk                         # prints usage (not an error)
+# expected output: (0,0) SYNTACTIC: usage: hulk <file.hulk>
+```
+
+#### 3. Compile a HULK program
+
+```bash
+./hulk examples/vectors.hulk   # generates ./output.c and ./output
+```
+
+On a clean run it prints nothing and the exit code is `0`. On error it reports
+to `stderr` in the contracted format:
+
+```
+(line,column) TYPE: message
+```
+
+#### 4. Run the generated binary
+
+```bash
+./output                       # runs the compiled HULK program
+```
+
+#### 5. Try your own programs
+
+Create a `my_program.hulk` file and run it:
+
+```bash
+./hulk my_program.hulk && ./output
+```
+
+#### 6. (Optional) Run the professor's test suite
+
+HULKForge ships with a harness that mirrors the professor's grader:
+
+```bash
+# Linux / macOS
+bash run_linux_tests.sh <tests_dir>
+
+# Windows / MinGW (uses ./hulk.exe)
+bash run_local_tests.sh <tests_dir>
+```
+
+`<tests_dir>` is the path to the `tests/hulk/` folder of the official test
+repository. The script walks the `ok/` categories (compares stdout against
+`.expected`) and the `errors/` categories (verifies exit code and error type).
+
+#### 7. (Optional) Run the Rust unit tests
+
+Each module ships its own test suite in `src/*/test.rs` or `tests.rs`:
+
+```bash
+cargo test                     # runs every unit test
+cargo test lexer               # filter by module name
 ```
 
 ---
 
-## Dependencias
+## Typical workflow
 
-| Crate | Versión | Propósito |
-|-------|---------|-----------|
-| `logos` | 0.14 | Lexer declarativo basado en regex |
-| `thiserror` | 2 | Tipos de error con Display automático |
-| `miette` | 7 | Reportes de error con fancy output |
-| `indexmap` | 2 | HashMap que preserva orden de inserción |
+```bash
+# Edit a .hulk file in examples/ or your own path
+$EDITOR examples/vectors.hulk
 
----
+# Compile it with HULKForge
+./hulk examples/vectors.hulk
 
-## Limitaciones actuales
+# If there are errors, you'll see something like:
+#   (3,15) SEMANTIC: type A does not have attribute z
+# Fix the .hulk and retry.
 
-Esta implementación del lexer establece el alcance deliberadamente en los siguientes aspectos:
-
-- ❌ **Sin comentarios multilínea** — Sólo soporta `//` de una línea
-- ❌ **Sin strings multilínea** — Los strings deben estar en una sola línea
-- ❌ **Parser no implementado** — El siguiente paso es construir el AST
-- ❌ **Identificadores internos (\_ident) requieren cuidado** — Solo válidos en código generado por el compilador, no en código de usuario
-- ❌ **Sin números en otras bases** — Solo decimal está soportado (hex, octal, binario son futuros)
-- ❌ **Sin tokens customizados en usuario** — El token enum es fijo
-
-Estas limitaciones se abordarán en fases posteriores por diseño.
-
----
-
-## Logos: Automatización de los 6 pasos del Lexer
-
-### El proceso tradicional (manual)
-
-Construir un lexer desde cero implica 6 pasos complejos:
-
-1. **Definir reglas con expresiones regulares** — escribir patrones para cada token
-2. **Convertir a NFAs (Thompson)** — transformar regexes en autómatas finitos no deterministas
-3. **Pasar a DFA (Subset Construction)** — eliminar no-determinismo para mayor eficiencia
-4. **Minimizar el DFA** — reducir estados innecesarios
-5. **Generar código** — crear tablas de transiciones y funciones de reconocimiento
-6. **Integrar en un bucle** — conectar con el parser para producir tokens
-
-### Cómo Logos lo automatiza
-
-**Logos** elimina pasos 2–5 automáticamente. Solo necesitas:
-
-```rust
-#[derive(Logos)]
-pub enum Token {
-    #[token("let")]          Let,
-    #[regex(r"[0-9]+")]      Number(String),
-    #[regex(r"[a-zA-Z]+")]   Ident(String),
-    // ...
-}
+# If it passes, run the generated binary
+./output
 ```
 
-Logos genera internamente el DFA optimizado, compilado en código máquina. En tiempo de ejecución, procesa el fuente en **un solo pase**, directamente sin tablas interpretadas.
+---
 
-### Ventajas en HULKForge
+## Dependencies
 
-- ✅ **Seguridad**: Compilación de tipos en Rust
-- ✅ **Velocidad**: DFA compilado, no interpretado
-- ✅ **Mantenibilidad**: Reglas legibles en el código
-- ✅ **Precisión**: `logos` maneja maximal munch correctamente
-- ✅ **Sin boilerplate**: No escribimos tablas de transiciones manualmente
+| Crate       | Version | Purpose                                    |
+|-------------|---------|--------------------------------------------|
+| `logos`     | 0.14    | Declarative lexer with compiled DFA        |
+| `thiserror` | 2       | Error types with derived `Display`         |
+| `indexmap`  | 2       | Insertion-order-preserving maps            |
+
+No runtime dependencies: the generated `./output` binary links only against
+`libc` and `libm`.
 
 ---
 
-## Contribuciones
+## License
 
-Este proyecto es parte del curso de Compiladores en la Universidad de La Habana.
-
----
-
-## Licencia
-
-Proyecto académico © 2026
+Academic project © 2026 — Compilers course, University of Havana.
