@@ -1,3 +1,9 @@
+//! Context management for the semantic checker.
+//!
+//! This module provides [`Context`], which holds the symbol tables, type information,
+//! and builtin definitions used during semantic analysis. It manages scopes for
+//! variables, functions, types, and protocols.
+
 use std::collections::{HashMap, HashSet};
 
 use super::checker::SimpleType;

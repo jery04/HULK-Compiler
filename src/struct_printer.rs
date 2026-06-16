@@ -1,3 +1,22 @@
+//! AST structure printer for debugging and development.
+//!
+//! This module provides utilities to visualize the HULK AST in a human-readable
+//! tree format. It is used primarily for development and debugging purposes,
+//! not for production compilation.
+//!
+//! # Features
+//! - Print a full [`Program`] as a nested tree.
+//! - Print individual [`Expr`] nodes with their spans.
+//! - Show type declarations, protocols, and their inheritance chains.
+//! - Include semantic information (when available).
+//!
+//! # Usage
+//! The `test_expression` and `test_program` functions can be called from
+//! a test harness or a development binary to inspect AST structure.
+//!
+//! The `skip` parameter on `test_program` is used to enable/disable printing
+//! for specific test cases.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::lexer::lexer::{Span, TokenStream};

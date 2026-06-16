@@ -1,3 +1,25 @@
+//! Main entry point for the HULK compiler.
+//!
+//! This module orchestrates the full compilation pipeline:
+//! 1. **Lexical analysis** – tokenizes the source code.
+//! 2. **Syntactic analysis** – parses tokens into an AST ([`parser::Program`]).
+//! 3. **Semantic analysis** – performs type checking and validation.
+//! 4. **Code generation** – lowers the AST to C and compiles it to an executable.
+//!
+//! The compiler follows the contract defined by the Matcom course:
+//! - Exits with code `1` for lexical errors.
+//! - Exits with code `2` for syntactic errors.
+//! - Exits with code `3` for semantic errors or backend failures.
+//! - Exits with code `0` on successful compilation.
+//!
+//! # Usage
+//! ```bash
+//! hulk <file.hulk>
+//! ```
+//! The generated executable is written to `./output` (or `output.exe` on Windows).
+
+
+
 #![allow(dead_code)]
 
 mod lexer; // lexer module
