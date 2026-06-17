@@ -98,13 +98,13 @@ Estas comprobaciones reflejan la distinción teórica entre propiedades sintáct
 
 ## 6. 🧬 Sistema de Tipos (Type System)
 
-El lenguaje HULK ofrece un conjunto de tipos primitivos y compuestos básicos: Number, Boolean y String como tipos primitivos. Además, existen tipos derivados para arreglos (vectors) y posiblemente `Null`/`Void` para funciones sin retorno.
+El lenguaje HULK ofrece un conjunto de tipos primitivos y compuestos básicos: Number, Boolean y String como tipos primitivos. Además, existen tipos `Null`/`Void` para funciones sin retorno.
 
-Las reglas de compatibilidad se definen explícitamente: operaciones aritméticas (`+`, `-`, `*`, `/`) requieren operandos `Number` y producen `Number`; las operaciones lógicas (`&&`, `||`, `!`) requieren `Boolean`; la concatenación puede estar definida para `String + String`. Cuando se permite coerción implícita (por ejemplo, entre `Number` y `String`), estas reglas se declaran en el checker y generan advertencias cuando la coerción es potencialmente ambigua.
+Las reglas de compatibilidad se definen explícitamente: operaciones aritméticas (`+`, `-`, `*`, `/`) requieren operandos `Number` y producen `Number`; las operaciones lógicas (`&&`, `||`, `!`) requieren `Boolean`. Cuando se permite coerción implícita (por ejemplo, entre `Number` y `String`), estas reglas se declaran en el checker y generan advertencias cuando la coerción es potencialmente ambigua.
 
 Desde la teoría, el sistema de tipos se describe como un conjunto de reglas de inferencia y verificación que asignan tipos a expresiones: en términos formales, se usan reglas de deducción tipo-judgment (Γ ⊢ e : τ) donde Γ es el contexto. La implementación traduce estas reglas a comprobaciones programáticas que recorren el AST: para cada nodo, se calculan los tipos de sus hijos y se aplica la regla correspondiente para derivar el tipo del nodo padre o emitir un error si no existe una regla que lo permita.
 
-El compilador aplica una inferencia local de tipos (no un sistema Hindley–Milner completo), suficiente para inferrir tipos a partir de literales y expresiones compuestas. Para funciones, la comprobación de firmas exige que los tipos de argumentos coincidan con los parámetros, y que el cuerpo de la función retorne el tipo declarado.
+El compilador aplica una inferencia local de tipos, suficiente para inferrir tipos a partir de literales y expresiones compuestas. Para funciones, la comprobación de firmas exige que los tipos de argumentos coincidan con los parámetros, y que el cuerpo de la función retorne el tipo declarado.
 
 Los errores de tipo se reportan con ubicación y una explicación del conflicto — por ejemplo, “se esperaba `Number` pero se encontró `String` en la suma”. Esta precisión es crucial para el desarrollo y depuración de programas en HULK.
 
