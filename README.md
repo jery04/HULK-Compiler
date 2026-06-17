@@ -1,6 +1,6 @@
-# ⚒️ HULKForge
+# HULKForge ⚒️
 
-**A compiler for the HULK language, written in Rust.**
+**A compiler for the HULK language, written in Rust.** 🧱
 
 HULKForge is an end-to-end compiler that takes a program in the HULK language
 (*Havana University Language Kompilation*) and produces a native binary, going
@@ -15,7 +15,7 @@ phase (`1` lexical, `2` syntactic, `3` semantic, `0` success).
 
 ---
 
-## Project structure
+## Project structure 📁
 
 ```
 HulkForge/
@@ -60,7 +60,7 @@ HulkForge/
     └── struct_printer.rs      # AST pretty-printer for debugging
 ```
 
-### Module roles
+### Module roles 🧭
 
 | Module         | Role in the pipeline                                                                   |
 |----------------|----------------------------------------------------------------------------------------|
@@ -72,9 +72,9 @@ HulkForge/
 
 ---
 
-## How to run the project
+## How to run the project ▶️
 
-### Prerequisites
+### Prerequisites 🛠️
 
 HULKForge requires two tools installed on the system:
 
@@ -90,7 +90,7 @@ order and uses the first one it finds. On Ubuntu/Debian install with:
 sudo apt install build-essential
 ```
 
-### Dependency installation
+### Dependency installation 📦
 
 Rust dependencies are declared in `Cargo.toml` and **managed automatically by
 Cargo** — no manual installation and no `requirements.txt`-style file is
@@ -104,16 +104,16 @@ once on a connected machine:
 cargo fetch                    # downloads all deps into the local cargo cache
 ```
 
-### Step-by-step
+### Step-by-step 🧭
 
-#### 1. Clone the repository and switch to the active branch
+#### 1. Clone the repository and switch to the active branch 🔀
 
 ```bash
 git clone https://github.com/JosuSC/HulkForge.git
 cd HulkForge
 ```
 
-#### 2. Build the compiler
+#### 2. Build the compiler 🏗️
 
 ```bash
 cargo build --release          # produces target/release/hulk_forge
@@ -127,7 +127,7 @@ Verify it works:
 # expected output: (0,0) SYNTACTIC: usage: hulk <file.hulk>
 ```
 
-#### 3. Compile a HULK program
+#### 3. Compile a HULK program ⚙️
 
 ```bash
 ./hulk examples/vectors.hulk   # generates ./output.c and ./output
@@ -140,13 +140,13 @@ to `stderr` in the contracted format:
 (line,column) TYPE: message
 ```
 
-#### 4. Run the generated binary
+#### 4. Run the generated binary ▶️
 
 ```bash
 ./output                       # runs the compiled HULK program
 ```
 
-#### 5. Try your own programs
+#### 5. Try your own programs ✍️
 
 Create a `my_program.hulk` file and run it:
 
@@ -154,7 +154,7 @@ Create a `my_program.hulk` file and run it:
 ./hulk my_program.hulk && ./output
 ```
 
-#### 6. (Optional) Run the professor's test suite
+#### 6. (Optional) Run the professor's test suite 🧪
 
 HULKForge ships with a harness that mirrors the professor's grader:
 
@@ -170,7 +170,7 @@ bash run_local_tests.sh <tests_dir>
 repository. The script walks the `ok/` categories (compares stdout against
 `.expected`) and the `errors/` categories (verifies exit code and error type).
 
-#### 7. (Optional) Run the Rust unit tests
+#### 7. (Optional) Run the Rust unit tests ✅
 
 Each module ships its own test suite in `src/*/test.rs` or `tests.rs`:
 
@@ -181,7 +181,7 @@ cargo test lexer               # filter by module name
 
 ---
 
-## Typical workflow
+## Typical workflow 🔁
 
 ```bash
 # Edit a .hulk file in examples/ or your own path
@@ -200,7 +200,7 @@ $EDITOR examples/vectors.hulk
 
 ---
 
-## Dependencies
+## Dependencies 📚
 
 | Crate       | Version | Purpose                                    |
 |-------------|---------|--------------------------------------------|
@@ -213,6 +213,6 @@ No runtime dependencies: the generated `./output` binary links only against
 
 ---
 
-## License
+## License 📜
 
 Academic project © 2026 — Compilers course, University of Havana.
