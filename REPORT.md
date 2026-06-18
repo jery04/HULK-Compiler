@@ -12,26 +12,26 @@ leerlo para entender el reporte.
 
 ## Índice
 
-1. Visión general y pipeline
-2. Dependencias y restricciones de compilación
-3. El contrato de interfaz y el modelo de errores
-4. Análisis léxico
-5. Análisis sintáctico (parser) y el AST
-6. Análisis semántico (las dos pasadas)
-7. Sistema de tipos y relación de conformidad
-8. Backend: generación de código a C
-9. Features del lenguaje y extensiones (núcleo del reporte)
-   - 9.1 Inferencia de tipos (A.9)
-   - 9.2 Protocolos / tipado estructural (A.10)
-   - 9.3 Iterables (A.11)
-   - 9.4 Vectores (A.12)
-   - 9.5 Extensión propia: sobrecarga de operadores
-   - 9.6 Extensión propia: asignación compuesta
-   - 9.7 Extensión propia: interpolación de cadenas
-10. Alternativas investigadas pero descartadas
-11. Pruebas y validación
-12. Limitaciones y trabajo futuro
-13. Conclusión
+- [1. Visión general y pipeline](#1-visión-general-y-pipeline)
+- [2. Dependencias y restricciones de compilación](#2-dependencias)
+- [3. El contrato de interfaz y el modelo de errores](#3-el-contrato-de-interfaz-y-el-modelo-de-errores)
+- [4. Análisis léxico](#4-análisis-léxico)
+- [5. Análisis sintáctico (parser) y el AST](#5-análisis-sintáctico-parser-y-el-ast)
+- [6. Análisis semántico (las dos pasadas)](#6-análisis-semántico-las-dos-pasadas)
+- [7. Sistema de tipos y relación de conformidad](#7-sistema-de-tipos-y-relación-de-conformidad)
+- [8. Backend: generación de código a C](#8-backend-generación-de-código-a-c)
+- [9. Features del lenguaje y extensiones (núcleo del reporte)](#9-features-del-lenguaje-y-extensiones)
+  - [9.1 Inferencia de tipos (A.9)](#91-inferencia-de-tipos-a9)
+  - [9.2 Protocolos / tipado estructural (A.10)](#92-protocolos--tipado-estructural-a10)
+  - [9.3 Iterables (A.11)](#93-iterables-a11)
+  - [9.4 Vectores (A.12)](#94-vectores-a12)
+  - [9.5 Extensión propia: sobrecarga de operadores](#95-extensión-propia-sobrecarga-de-operadores)
+  - [9.6 Extensión propia: asignación compuesta](#96-extensión-propia-asignación-compuesta)
+  - [9.7 Extensión propia: interpolación de cadenas](#97-extensión-propia-interpolación-de-cadenas)
+- [10. Alternativas investigadas pero descartadas](#10-alternativas-investigadas-pero-descartadas)
+- [11. Pruebas y validación](#11-pruebas-y-validación)
+- [12. Limitaciones y trabajo futuro](#12-limitaciones-y-trabajo-futuro)
+- [13. Conclusión](#13-conclusión)
 
 ---
 
