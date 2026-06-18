@@ -24,7 +24,6 @@
 
 mod lexer; // lexer module
 mod parser; // parser module
-mod evaluator; // evaluator module (frozen probe)
 mod struct_printer; // structure printer module (dev)
 mod semantic; // semantic checker module
 mod codegen; // C backend

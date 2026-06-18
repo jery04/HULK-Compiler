@@ -56,7 +56,6 @@ HulkForge/
     │
     ├── codegen.rs             # ── Phase 4: AST lowering to C ──
     │
-    ├── evaluator/             # Frozen experimental probe (unused in prod)
     └── struct_printer.rs      # AST pretty-printer for debugging
 ```
 
