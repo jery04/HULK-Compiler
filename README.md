@@ -1,4 +1,4 @@
-# HULKForge ⚒️
+# HULK Compiler ⚒️
 
 **A compiler for the HULK language, written in Rust.** 🧱
 
@@ -6,6 +6,8 @@ HULKForge is an end-to-end compiler that takes a program in the HULK language
 (*Havana University Language Kompilation*) and produces a native binary, going
 through the four classical phases: lexical analysis, syntactic analysis,
 semantic analysis, and C code generation.
+
+> NOTE: The definition of the HULK programming language, including its syntax, semantics, and all its features, can be found in the [official appendix](https://matcom.github.io/hulk/appendix-hulk-syntax.html). 
 
 The project is structured as a single-pass monolithic pipeline: each phase
 consumes the output of the previous one and halts the flow as soon as it
